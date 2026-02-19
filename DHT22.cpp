@@ -1,0 +1,64 @@
+/* *******************************************************************************
+ * MIT License
+ *
+ * Copyright (c) 2026 Nico Trost
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ * **************************************************************************** */
+
+#include "DHT22.h"
+#include <fstream>
+
+namespace PowerBox
+{
+    DHT22::DHT22(const char* dev)
+    {
+        this->path_ = "/sys/bus/iio/devices/iio:" + std::string(dev);
+    }
+
+    DHT22::~DHT22(void)
+    {
+    }
+
+    float DHT22::getTemperature(void) const
+    {
+        std::string val = this->read_(this->path_ + "/in_temp_input");
+        return val.empty() ? -127.f : std::stof(val) * 0.001f;
+    }
+
+    float DHT22::getHumidity(void) const
+    {
+        std::string val = this->read_(this->path_ + "/in_humidityrelative_input");
+        return val.empty() ? -127.f : std::stof(val) * 0.001f;
+    }
+
+    std::string DHT22::read_(const std::string& path) const
+    {
+        std::ifstream ifs(path);
+        if(!ifs)
+        {
+            return "";
+        }
+
+        std::string val;
+        ifs >> val;
+
+        return val;
+    }
+} /* namespace PowerBox */

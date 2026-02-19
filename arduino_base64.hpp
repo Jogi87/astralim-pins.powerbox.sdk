@@ -79,4 +79,6 @@ namespace base64 {
     * ```
     */
     size_t decodeLength(const char* input);
+
+    bool EncryptPassword(const char *plainPassword, const char *uuid, char *encryptedBase64Output);
 }

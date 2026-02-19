@@ -118,10 +118,24 @@ void DisplayPortStatus(int deviceId)
     PB_ERROR_TYPE result = PBGetPowerPortStatus(deviceId, &powerPorts);
     if (result == PB_SUCCESS)
     {
-        for (int i = 0; i < PB_NUM_POWER_PORTS; ++i)
+        for (int i = 0; i < powerPorts.numPorts; ++i)
         {
+            PB_POWER_PORT_CONFIG config = {};
+            config.index = i;
+            PB_ERROR_TYPE cfgResult = PBGetPowerPortConfig(deviceId, &config);
+            
             const char *overcurrent = powerPorts.overcurrent[i] ? "[OVERCURRENT]" : "OK";
-            printf("Power Port %d: %.3f A - %s\n", i + 1, powerPorts.current[i], overcurrent);
+            if (cfgResult == PB_SUCCESS)
+            {
+                const char *enabled = config.enabled ? "ENABLED" : "DISABLED";
+                const char *bootState = config.bootState ? "ON" : "OFF";
+                printf("Power Port %d: %.3f A - State: %s, Boot: %s, %s\n", 
+                       i + 1, powerPorts.current[i], enabled, bootState, overcurrent);
+            }
+            else
+            {
+                printf("Power Port %d: %.3f A - %s (config unavailable)\n", i + 1, powerPorts.current[i], overcurrent);
+            }
         }
     }
     else
@@ -134,10 +148,25 @@ void DisplayPortStatus(int deviceId)
     result = PBGetUSBPortStatus(deviceId, &usbPorts);
     if (result == PB_SUCCESS)
     {
-        for (int i = 0; i < PB_NUM_USB_PORTS; ++i)
+        for (int i = 0; i < usbPorts.numPorts; ++i)
         {
+            PB_USB_PORT_CONFIG config = {};
+            config.index = i;
+            PB_ERROR_TYPE cfgResult = PBGetUSBPortConfig(deviceId, &config);
+            
             const char *overcurrent = usbPorts.overcurrent[i] ? "[OVERCURRENT]" : "OK";
-            printf("USB Port %d: %.3f A, %.2f V - %s\n", i + 1, usbPorts.current[i], usbPorts.voltage[i], overcurrent);
+            if (cfgResult == PB_SUCCESS)
+            {
+                const char *enabled = config.enabled ? "ENABLED" : "DISABLED";
+                const char *bootState = config.bootState ? "ON" : "OFF";
+                printf("USB Port %d: %.3f A, %.2f V - State: %s, Boot: %s, %s\n", 
+                       i + 1, usbPorts.current[i], usbPorts.voltage[i], enabled, bootState, overcurrent);
+            }
+            else
+            {
+                printf("USB Port %d: %.3f A, %.2f V - %s (config unavailable)\n", 
+                       i + 1, usbPorts.current[i], usbPorts.voltage[i], overcurrent);
+            }
         }
     }
     else
@@ -150,18 +179,13 @@ void DisplayPortStatus(int deviceId)
     result = PBGetDewPortStatus(deviceId, &dewPorts);
     if (result == PB_SUCCESS)
     {
-        for (int i = 0; i < PB_NUM_DEW_PORTS; ++i)
+        for (int i = 0; i < dewPorts.numPorts; ++i)
         {
             const char *state = dewPorts.state[i] ? "ON" : "OFF";
             const char *overcurrent = dewPorts.overcurrent[i] ? "[OVERCURRENT]" : "OK";
             
-            // Get auto mode info from internal device structure
-            std::lock_guard<std::mutex> lock(PowerBox::g_globalMutex);
-            auto it = PowerBox::g_devices.find(deviceId);
-            const char *autoMode = (it != PowerBox::g_devices.end() && it->second->dewAuto[i]) ? "AUTO" : "MANUAL";
-            
-            printf("Dew Port %d: %.3f A, Probe Temp: %.2f °C, PWM: %d%%, State: %s, Mode: %s - %s\n", 
-                   i + 1, dewPorts.current[i], dewPorts.probe[i], dewPorts.pwm[i], state, autoMode, overcurrent);
+            printf("Dew Port %d: %.3f A, Probe Temp: %.2f °C, PWM: %d%%, State: %s - %s\n", 
+                   i + 1, dewPorts.current[i], dewPorts.probe[i], dewPorts.pwm[i], state, overcurrent);
         }
     }
     else
@@ -281,6 +305,8 @@ void DisplayAllInfo(int deviceId)
 
     DisplayStatus(deviceId);
     DisplayConfig(deviceId);
+    DisplaySupplyStatus(deviceId);
+    DisplayPortStatus(deviceId);
 }
 
 void TestGetSetConfig(int deviceId)
@@ -398,243 +424,258 @@ void TestGetSetConfig(int deviceId)
 
 void ConfigurePowerPorts(int deviceId)
 {
-    printf("\n=== Power Ports Configuration ===\n");
-    printf("You have %d power ports (1-%d)\n\n", PB_NUM_POWER_PORTS, PB_NUM_POWER_PORTS);
-
-    for (int port = 0; port < PB_NUM_POWER_PORTS; port++)
+    PB_POWER_PORT_STATUS ports;
+    auto result = PBGetPowerPortStatus(deviceId, &ports);
+    if (result == PB_SUCCESS)
     {
-        PB_POWER_PORT_CONFIG config = {};
-        config.index = port;
+        printf("\n=== Power Ports Configuration ===\n");
+        printf("You have %d power ports (1-%d)\n\n", ports.numPorts, ports.numPorts);
+
+        for (int port = 0; port < ports.numPorts; port++)
+        {
+            PB_POWER_PORT_CONFIG config = {};
+            config.index = port;
         
-        PB_ERROR_TYPE result = PBGetPowerPortConfig(deviceId, &config);
-        if (result != PB_SUCCESS)
-        {
-            printf("[FAIL] Failed to get config for power port %d (Error: %d)\n", port + 1, result);
-            continue;
-        }
-
-        printf("--- Power Port %d ---\n", port + 1);
-        printf("Current Enabled: %s\n", config.enabled ? "YES" : "NO");
-        printf("Current Boot State: %s\n\n", config.bootState ? "ON" : "OFF");
-
-        char input[128];
-        unsigned int mask = 0;
-        PB_POWER_PORT_CONFIG updates = {};
-        updates.index = port;
-
-        printf("Enable port? (y/n, leave empty to skip): ");
-        fflush(stdout);
-        if (fgets(input, sizeof(input), stdin) && input[0] != '\n')
-        {
-            updates.enabled = (input[0] == 'y' || input[0] == 'Y') ? 1 : 0;
-            mask |= MASK_PORT_ENABLE;
-        }
-
-        printf("Boot state (1=ON, 0=OFF, leave empty to skip): ");
-        fflush(stdout);
-        if (fgets(input, sizeof(input), stdin) && input[0] != '\n')
-        {
-            updates.bootState = atoi(input);
-            mask |= MASK_PORT_BOOT_STATE;
-        }
-
-        printf("Reset overcurrent? (y/n, leave empty to skip): ");
-        fflush(stdout);
-        if (fgets(input, sizeof(input), stdin) && input[0] != '\n')
-        {
-            updates.overcurrentReset = (input[0] == 'y' || input[0] == 'Y') ? 1 : 0;
-            mask |= MASK_PORT_OVERCURRENT_RESET;
-        }
-
-        if (mask > 0)
-        {
-            updates.mask = mask;
-            result = PBSetPowerPortConfig(deviceId, &updates);
-            if (result == PB_SUCCESS)
+            PB_ERROR_TYPE result = PBGetPowerPortConfig(deviceId, &config);
+            if (result != PB_SUCCESS)
             {
-                printf("[OK] Power port %d updated\n\n", port + 1);
+                printf("[FAIL] Failed to get config for power port %d (Error: %d)\n", port + 1, result);
+                continue;
+            }
+
+            printf("--- Power Port %d ---\n", port + 1);
+            printf("Current Enabled: %s\n", config.enabled ? "YES" : "NO");
+            printf("Current Boot State: %s\n\n", config.bootState ? "ON" : "OFF");
+
+            char input[128];
+            unsigned int mask = 0;
+            PB_POWER_PORT_CONFIG updates = {};
+            updates.index = port;
+
+            printf("Enable port? (y/n, leave empty to skip): ");
+            fflush(stdout);
+            if (fgets(input, sizeof(input), stdin) && input[0] != '\n')
+            {
+                updates.enabled = (input[0] == 'y' || input[0] == 'Y') ? 1 : 0;
+                mask |= MASK_PORT_ENABLE;
+            }
+
+            printf("Boot state (1=ON, 0=OFF, leave empty to skip): ");
+            fflush(stdout);
+            if (fgets(input, sizeof(input), stdin) && input[0] != '\n')
+            {
+                updates.bootState = atoi(input);
+                mask |= MASK_PORT_BOOT_STATE;
+            }
+
+            printf("Reset overcurrent? (y/n, leave empty to skip): ");
+            fflush(stdout);
+            if (fgets(input, sizeof(input), stdin) && input[0] != '\n')
+            {
+                updates.overcurrentReset = (input[0] == 'y' || input[0] == 'Y') ? 1 : 0;
+                mask |= MASK_PORT_OVERCURRENT_RESET;
+            }
+
+            if (mask > 0)
+            {
+                updates.mask = mask;
+                result = PBSetPowerPortConfig(deviceId, &updates);
+                if (result == PB_SUCCESS)
+                {
+                    printf("[OK] Power port %d updated\n\n", port + 1);
+                }
+                else
+                {
+                    printf("[FAIL] Failed to update power port %d (Error: %d)\n\n", port + 1, result);
+                }
             }
             else
             {
-                printf("[FAIL] Failed to update power port %d (Error: %d)\n\n", port + 1, result);
+                printf("No changes for power port %d\n\n", port + 1);
             }
-        }
-        else
-        {
-            printf("No changes for power port %d\n\n", port + 1);
         }
     }
 }
 
 void ConfigureUSBPorts(int deviceId)
 {
-    printf("\n=== USB Ports Configuration ===\n");
-    printf("You have %d USB ports (1-%d)\n\n", PB_NUM_USB_PORTS, PB_NUM_USB_PORTS);
-
-    for (int port = 0; port < PB_NUM_USB_PORTS; port++)
+    PB_USB_PORT_STATUS ports;
+    auto result = PBGetUSBPortStatus(deviceId, &ports);
+    if (result == PB_SUCCESS)
     {
-        PB_USB_PORT_CONFIG config = {};
-        config.index = port;
-        
-        PB_ERROR_TYPE result = PBGetUSBPortConfig(deviceId, &config);
-        if (result != PB_SUCCESS)
+        printf("\n=== USB Ports Configuration ===\n");
+        printf("You have %d USB ports (1-%d)\n\n", ports.numPorts, ports.numPorts);
+
+        for (int port = 0; port < ports.numPorts; port++)
         {
-            printf("[FAIL] Failed to get config for USB port %d (Error: %d)\n", port + 1, result);
-            continue;
-        }
-
-        printf("--- USB Port %d ---\n", port + 1);
-        printf("Current Enabled: %s\n", config.enabled ? "YES" : "NO");
-        printf("Current Boot State: %s\n\n", config.bootState ? "ON" : "OFF");
-
-        char input[128];
-        unsigned int mask = 0;
-        PB_USB_PORT_CONFIG updates = {};
-        updates.index = port;
-
-        printf("Enable port? (y/n, leave empty to skip): ");
-        fflush(stdout);
-        if (fgets(input, sizeof(input), stdin) && input[0] != '\n')
-        {
-            updates.enabled = (input[0] == 'y' || input[0] == 'Y') ? 1 : 0;
-            mask |= MASK_PORT_ENABLE;
-        }
-
-        printf("Boot state (1=ON, 0=OFF, leave empty to skip): ");
-        fflush(stdout);
-        if (fgets(input, sizeof(input), stdin) && input[0] != '\n')
-        {
-            updates.bootState = atoi(input);
-            mask |= MASK_PORT_BOOT_STATE;
-        }
-
-        printf("Reset overcurrent? (y/n, leave empty to skip): ");
-        fflush(stdout);
-        if (fgets(input, sizeof(input), stdin) && input[0] != '\n')
-        {
-            updates.overcurrentReset = (input[0] == 'y' || input[0] == 'Y') ? 1 : 0;
-            mask |= MASK_PORT_OVERCURRENT_RESET;
-        }
-
-        if (mask > 0)
-        {
-            updates.mask = mask;
-            result = PBSetUSBPortConfig(deviceId, &updates);
-            if (result == PB_SUCCESS)
+            PB_USB_PORT_CONFIG config = {};
+            config.index = port;
+            
+            PB_ERROR_TYPE result = PBGetUSBPortConfig(deviceId, &config);
+            if (result != PB_SUCCESS)
             {
-                printf("[OK] USB port %d updated\n\n", port + 1);
+                printf("[FAIL] Failed to get config for USB port %d (Error: %d)\n", port + 1, result);
+                continue;
+            }
+
+            printf("--- USB Port %d ---\n", port + 1);
+            printf("Current Enabled: %s\n", config.enabled ? "YES" : "NO");
+            printf("Current Boot State: %s\n\n", config.bootState ? "ON" : "OFF");
+
+            char input[128];
+            unsigned int mask = 0;
+            PB_USB_PORT_CONFIG updates = {};
+            updates.index = port;
+
+            printf("Enable port? (y/n, leave empty to skip): ");
+            fflush(stdout);
+            if (fgets(input, sizeof(input), stdin) && input[0] != '\n')
+            {
+                updates.enabled = (input[0] == 'y' || input[0] == 'Y') ? 1 : 0;
+                mask |= MASK_PORT_ENABLE;
+            }
+
+            printf("Boot state (1=ON, 0=OFF, leave empty to skip): ");
+            fflush(stdout);
+            if (fgets(input, sizeof(input), stdin) && input[0] != '\n')
+            {
+                updates.bootState = atoi(input);
+                mask |= MASK_PORT_BOOT_STATE;
+            }
+
+            printf("Reset overcurrent? (y/n, leave empty to skip): ");
+            fflush(stdout);
+            if (fgets(input, sizeof(input), stdin) && input[0] != '\n')
+            {
+                updates.overcurrentReset = (input[0] == 'y' || input[0] == 'Y') ? 1 : 0;
+                mask |= MASK_PORT_OVERCURRENT_RESET;
+            }
+
+            if (mask > 0)
+            {
+                updates.mask = mask;
+                result = PBSetUSBPortConfig(deviceId, &updates);
+                if (result == PB_SUCCESS)
+                {
+                    printf("[OK] USB port %d updated\n\n", port + 1);
+                }
+                else
+                {
+                    printf("[FAIL] Failed to update USB port %d (Error: %d)\n\n", port + 1, result);
+                }
             }
             else
             {
-                printf("[FAIL] Failed to update USB port %d (Error: %d)\n\n", port + 1, result);
+                printf("No changes for USB port %d\n\n", port + 1);
             }
-        }
-        else
-        {
-            printf("No changes for USB port %d\n\n", port + 1);
         }
     }
 }
 
 void ConfigureDewPorts(int deviceId)
 {
-    printf("\n=== Dew Ports Configuration ===\n");
-    printf("You have %d dew ports (1-%d)\n\n", PB_NUM_DEW_PORTS, PB_NUM_DEW_PORTS);
+    PB_DEW_PORT_STATUS ports;
+    auto result = PBGetDewPortStatus(deviceId, &ports);
+    if (result == PB_SUCCESS)
+    {
+        printf("\n=== Dew Ports Configuration ===\n");
+        printf("You have %d dew ports (1-%d)\n\n", ports.numPorts, ports.numPorts);
 
-    /* Get PWM resolution from status */
-    PB_DEW_PORT_STATUS dewStatus;
-    PB_ERROR_TYPE statusResult = PBGetDewPortStatus(deviceId, &dewStatus);
-    int maxPWMValue = 255; /* Default, will be updated if status is available */
-    
-    if (statusResult == PB_SUCCESS && dewStatus.pwmResolution > 0)
-    {
-        maxPWMValue = (1 << dewStatus.pwmResolution) - 1; /* 2^resolution - 1 */
-        printf("PWM Resolution: %d bits (max value: %d)\n\n", dewStatus.pwmResolution, maxPWMValue);
-    }
-    else
-    {
-        printf("Warning: Could not determine PWM resolution, using default max value: %d\n\n", maxPWMValue);
-    }
-
-    for (int port = 0; port < PB_NUM_DEW_PORTS; port++)
-    {
-        PB_DEW_PORT_CONFIG config = {};
-        config.index = port;
+        /* Get PWM resolution from status */
+        PB_DEW_PORT_STATUS dewStatus;
+        PB_ERROR_TYPE statusResult = PBGetDewPortStatus(deviceId, &dewStatus);
+        int maxPWMValue = 255; /* Default, will be updated if status is available */
         
-        PB_ERROR_TYPE result = PBGetDewPortConfig(deviceId, &config);
-        if (result != PB_SUCCESS)
+        if (statusResult == PB_SUCCESS && dewStatus.pwmResolution > 0)
         {
-            printf("[FAIL] Failed to get config for dew port %d (Error: %d)\n", port + 1, result);
-            continue;
-        }
-
-        printf("--- Dew Port %d ---\n", port + 1);
-        printf("Current Enabled: %s\n", config.enabled ? "YES" : "NO");
-        printf("Current Auto Mode: %s\n", config.autoMode ? "YES" : "NO");
-        printf("Current Auto Threshold: %.2f °C\n", config.autoThreshold);
-        printf("Current PWM Value: %d (0-%d)\n\n", config.power, maxPWMValue);
-
-        char input[128];
-        unsigned int mask = 0;
-        PB_DEW_PORT_CONFIG updates = {};
-        updates.index = port;
-
-        printf("Enable port? (y/n, leave empty to skip): ");
-        fflush(stdout);
-        if (fgets(input, sizeof(input), stdin) && input[0] != '\n')
-        {
-            updates.enabled = (input[0] == 'y' || input[0] == 'Y') ? 1 : 0;
-            mask |= MASK_PORT_ENABLE;
-        }
-
-        printf("Auto mode? (y/n, leave empty to skip): ");
-        fflush(stdout);
-        if (fgets(input, sizeof(input), stdin) && input[0] != '\n')
-        {
-            updates.autoMode = (input[0] == 'y' || input[0] == 'Y') ? 1 : 0;
-            mask |= MASK_PORT_AUTO_DEW_MODE;
-        }
-
-        printf("Auto threshold in °C (leave empty to skip): ");
-        fflush(stdout);
-        if (fgets(input, sizeof(input), stdin) && input[0] != '\n')
-        {
-            updates.autoThreshold = (float)atof(input);
-            mask |= MASK_PORT_AUTO_DEW_THRESHOLD;
-        }
-
-        printf("PWM value 0-%d (leave empty to skip): ", maxPWMValue);
-        fflush(stdout);
-        if (fgets(input, sizeof(input), stdin) && input[0] != '\n')
-        {
-            updates.power = atoi(input);
-            mask |= MASK_PORT_POWER;
-        }
-
-        printf("Reset overcurrent? (y/n, leave empty to skip): ");
-        fflush(stdout);
-        if (fgets(input, sizeof(input), stdin) && input[0] != '\n')
-        {
-            updates.overcurrentReset = (input[0] == 'y' || input[0] == 'Y') ? 1 : 0;
-            mask |= MASK_PORT_OVERCURRENT_RESET;
-        }
-
-        if (mask > 0)
-        {
-            updates.mask = mask;
-            result = PBSetDewPortConfig(deviceId, &updates);
-            if (result == PB_SUCCESS)
-            {
-                printf("[OK] Dew port %d updated\n\n", port + 1);
-            }
-            else
-            {
-                printf("[FAIL] Failed to update dew port %d (Error: %d)\n\n", port + 1, result);
-            }
+            maxPWMValue = (1 << dewStatus.pwmResolution) - 1; /* 2^resolution - 1 */
+            printf("PWM Resolution: %d bits (max value: %d)\n\n", dewStatus.pwmResolution, maxPWMValue);
         }
         else
         {
-            printf("No changes for dew port %d\n\n", port + 1);
+            printf("Warning: Could not determine PWM resolution, using default max value: %d\n\n", maxPWMValue);
+        }
+
+        for (int port = 0; port < ports.numPorts; port++)
+        {
+            PB_DEW_PORT_CONFIG config = {};
+            config.index = port;
+            
+            PB_ERROR_TYPE result = PBGetDewPortConfig(deviceId, &config);
+            if (result != PB_SUCCESS)
+            {
+                printf("[FAIL] Failed to get config for dew port %d (Error: %d)\n", port + 1, result);
+                continue;
+            }
+
+            printf("--- Dew Port %d ---\n", port + 1);
+            printf("Current Enabled: %s\n", config.enabled ? "YES" : "NO");
+            printf("Current Auto Mode: %s\n", config.autoMode ? "YES" : "NO");
+            printf("Current Auto Threshold: %.2f °C\n", config.autoThreshold);
+            printf("Current PWM Value: %d (0-%d)\n\n", config.power, maxPWMValue);
+
+            char input[128];
+            unsigned int mask = 0;
+            PB_DEW_PORT_CONFIG updates = {};
+            updates.index = port;
+
+            printf("Enable port? (y/n, leave empty to skip): ");
+            fflush(stdout);
+            if (fgets(input, sizeof(input), stdin) && input[0] != '\n')
+            {
+                updates.enabled = (input[0] == 'y' || input[0] == 'Y') ? 1 : 0;
+                mask |= MASK_PORT_ENABLE;
+            }
+
+            printf("Auto mode? (y/n, leave empty to skip): ");
+            fflush(stdout);
+            if (fgets(input, sizeof(input), stdin) && input[0] != '\n')
+            {
+                updates.autoMode = (input[0] == 'y' || input[0] == 'Y') ? 1 : 0;
+                mask |= MASK_PORT_AUTO_DEW_MODE;
+            }
+
+            printf("Auto threshold in °C (leave empty to skip): ");
+            fflush(stdout);
+            if (fgets(input, sizeof(input), stdin) && input[0] != '\n')
+            {
+                updates.autoThreshold = (float)atof(input);
+                mask |= MASK_PORT_AUTO_DEW_THRESHOLD;
+            }
+
+            printf("PWM value 0-%d (leave empty to skip): ", maxPWMValue);
+            fflush(stdout);
+            if (fgets(input, sizeof(input), stdin) && input[0] != '\n')
+            {
+                updates.power = atoi(input);
+                mask |= MASK_PORT_POWER;
+            }
+
+            printf("Reset overcurrent? (y/n, leave empty to skip): ");
+            fflush(stdout);
+            if (fgets(input, sizeof(input), stdin) && input[0] != '\n')
+            {
+                updates.overcurrentReset = (input[0] == 'y' || input[0] == 'Y') ? 1 : 0;
+                mask |= MASK_PORT_OVERCURRENT_RESET;
+            }
+
+            if (mask > 0)
+            {
+                updates.mask = mask;
+                result = PBSetDewPortConfig(deviceId, &updates);
+                if (result == PB_SUCCESS)
+                {
+                    printf("[OK] Dew port %d updated\n\n", port + 1);
+                }
+                else
+                {
+                    printf("[FAIL] Failed to update dew port %d (Error: %d)\n\n", port + 1, result);
+                }
+            }
+            else
+            {
+                printf("No changes for dew port %d\n\n", port + 1);
+            }
         }
     }
 }

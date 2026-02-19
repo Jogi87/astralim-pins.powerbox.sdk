@@ -46,10 +46,9 @@ extern "C"
 #define PB_HOSTNAME_LEN 32          /* Maximum hostname length */
 #define PB_PASSWORD_LEN 64          /* Maximum WiFi password length */
 
-
-#define PB_NUM_POWER_PORTS 6
-#define PB_NUM_USB_PORTS 6
-#define PB_NUM_DEW_PORTS 2
+#define PB_MAX_POWER_PORTS 8
+#define PB_MAX_USB_PORTS 8
+#define PB_MAX_DEW_PORTS 2
 
     typedef enum _PB_ERROR_TYPE
     {
@@ -60,6 +59,7 @@ extern "C"
         PB_ERROR_COMMUNICATION,     /* Data communication error such as device has been removed from USB port */
         PB_ERROR_NULL_POINTER,      /* Caller passes null-pointer parameter which is not expected */
         PB_ERROR_TIMEOUT,           /* Function call timed out */
+        PB_ERROR_NOT_AVAILABLE,     /* Function not available on given device */
     } PB_ERROR_TYPE;
 
     typedef enum _PB_WIFI_MODE
@@ -102,10 +102,12 @@ extern "C"
     typedef struct _PB_DEVICE_STATUS
     {
         int upTime;                 /* Up time [s] */
+        float coreTemp;             /* Core temperature [°C] */
         float temperature;          /* Ambient temperature [°C] */
         float humidity;             /* Humidity [%] */
         float dewPoint;             /* Dew Point [°C] */
         int extSensor;              /* External sensor connected flag */
+        int hasWifi;                /* On-board WiFi */
     } PB_DEVICE_STATUS;
 
     typedef struct _PB_SUPPLY_STATUS
@@ -113,31 +115,35 @@ extern "C"
         float mainVoltage;                           /* Main supply voltage [V] */
         float usbVoltage;                            /* USB supply voltage [V] */
         float current;                               /* Total current draw [A] */
-        float ampereHours;                           /* Battery capacity [Ah] */
-        float wattHours;                             /* Battery energy [Wh] */
+        float averageAmperes;                        /* Average current draw [A] */
+        float ampereHours;                           /* Ampere hours [Ah] */
+        float wattHours;                             /* Watt hours [Wh] */
     } PB_SUPPLY_STATUS;
 
     typedef struct _PB_POWER_PORT_STATUS
     {
-        float current[PB_NUM_POWER_PORTS];          /* Current draw [A] */
-        int overcurrent[PB_NUM_POWER_PORTS];        /* Overcurrent flag */
+        int numPorts;                               /* Number of ports */
+        float current[PB_MAX_POWER_PORTS];          /* Current draw [A] */
+        int overcurrent[PB_MAX_POWER_PORTS];        /* Overcurrent flag */
     } PB_POWER_PORT_STATUS;
 
     typedef struct _PB_USB_PORT_STATUS
     {
-        float current[PB_NUM_USB_PORTS];             /* Current draw [A] */
-        float voltage[PB_NUM_USB_PORTS];             /* Output voltage [V] */
-        int overcurrent[PB_NUM_USB_PORTS];           /* Overcurrent flag */
+        int numPorts;                               /* Number of ports */
+        float current[PB_MAX_USB_PORTS];            /* Current draw [A] */
+        float voltage[PB_MAX_USB_PORTS];            /* Output voltage [V] */
+        int overcurrent[PB_MAX_USB_PORTS];          /* Overcurrent flag */
     } PB_USB_PORT_STATUS;
 
     typedef struct _PB_DEW_PORT_STATUS
     {
-        int pwmResolution;                           /* PWM resolution (bit depth) */
-        float current[PB_NUM_DEW_PORTS];             /* Current draw [A] */
-        int overcurrent[PB_NUM_DEW_PORTS];           /* Overcurrent flag */
-        float probe[PB_NUM_DEW_PORTS];               /* Probe temperature [°C] */
-        int pwm[PB_NUM_DEW_PORTS];                   /* PWM value [%] */
-        int state[PB_NUM_DEW_PORTS];                 /* Port state (ON/OFF) */
+        int numPorts;                               /* Number of ports */
+        int pwmResolution;                          /* PWM resolution (bit depth) */
+        float current[PB_MAX_DEW_PORTS];            /* Current draw [A] */
+        int overcurrent[PB_MAX_DEW_PORTS];          /* Overcurrent flag */
+        float probe[PB_MAX_DEW_PORTS];              /* Probe temperature [°C] */
+        int pwm[PB_MAX_DEW_PORTS];                  /* PWM value [%] */
+        int state[PB_MAX_DEW_PORTS];                /* Port state (ON/OFF) */
     } PB_DEW_PORT_STATUS;
 
     typedef struct _PB_BUCK_PORT_STATUS
@@ -254,8 +260,7 @@ extern "C"
     } PB_WIFI_CONFIG;
 
     /* Device scanning and management */
-    PBAPI PB_ERROR_TYPE
-    PBScan(int *number, int *ids);
+    PBAPI PB_ERROR_TYPE PBScan(int *number, int *ids);
     PBAPI PB_ERROR_TYPE PBOpen(int id);
     PBAPI PB_ERROR_TYPE PBClose(int id);
     PBAPI PB_ERROR_TYPE PBGetSerial(int id, char *serial);

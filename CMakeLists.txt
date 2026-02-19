@@ -23,7 +23,7 @@
 # ###############################################################################
 
 cmake_minimum_required(VERSION 3.22)
-project(PowerBoxSDK VERSION 1.0.0 DESCRIPTION "PowerBox SDK")
+project(PowerBoxSDK VERSION 1.1.0 DESCRIPTION "PowerBox SDK")
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -34,14 +34,39 @@ if(UNIX)
     pkg_check_modules(LIBUDEV libudev)
 endif()
 
-# SDK Library
-add_library(PowerBoxSDK SHARED
+# SDK sources (conditionally include PinsBox / GPIO manager)
+set(SDK_SOURCES
     PowerBoxSDK.cpp
     PowerBoxLogging.cpp
     PowerBoxSerialPort.cpp
     PowerBoxDevice.cpp
-    PowerBoxProtocol.cpp
-    base64.cpp)
+    DS18B20.cpp
+    Device.cpp
+    USB.cpp
+    ADJ.cpp
+    base64.cpp
+    MCP4725.cpp
+    INA219.cpp
+    PWM.cpp
+    DHT22.cpp
+    DEW.cpp
+    BTS7XXX.cpp
+    MCP320X.cpp
+    TCA953X.cpp)
+
+# Detect libgpiod and append hardware sources when available
+if(UNIX)
+    pkg_check_modules(LIBGPIOD libgpiod)
+endif()
+
+if(LIBGPIOD_FOUND)
+    list(APPEND SDK_SOURCES GPIOManager.cpp PinsBoxDevice.cpp)
+else()
+    message(STATUS "libgpiod not found. GPIO / PinsBox support will be disabled (install libgpiod-dev to enable)")
+endif()
+
+# SDK Library
+add_library(PowerBoxSDK SHARED ${SDK_SOURCES})
 
 # Public headers
 target_include_directories(PowerBoxSDK PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
@@ -50,6 +75,11 @@ target_include_directories(PowerBoxSDK PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 find_package(OpenSSL REQUIRED)
 target_link_libraries(PowerBoxSDK PRIVATE OpenSSL::Crypto)
 
+# Find and link jsoncpp
+find_package(jsoncpp REQUIRED)
+target_include_directories(PowerBoxSDK PRIVATE /usr/include/jsoncpp)
+target_link_libraries(PowerBoxSDK PRIVATE jsoncpp)
+
 # Link libudev
 if(UNIX)
     if(LIBUDEV_FOUND)
@@ -57,6 +87,18 @@ if(UNIX)
         target_link_libraries(PowerBoxSDK PRIVATE ${LIBUDEV_LIBRARIES})
     else()
         message(FATAL_ERROR "libudev not found. Install it with: sudo apt-get install libudev-dev")
+    endif()
+endif()
+
+# Find and link libgpiod
+if(UNIX)
+    pkg_check_modules(LIBGPIOD libgpiod)
+    if(LIBGPIOD_FOUND)
+        target_compile_definitions(PowerBoxSDK PRIVATE HAVE_LIBGPIOD=1)
+        target_include_directories(PowerBoxSDK PRIVATE ${LIBGPIOD_INCLUDE_DIRS})
+        target_link_libraries(PowerBoxSDK PRIVATE ${LIBGPIOD_LIBRARIES})
+    else()
+        message(STATUS "libgpiod not found. GPIO control may not work. Install with: sudo apt-get install libgpiod-dev")
     endif()
 endif()
 
@@ -75,7 +117,7 @@ install(TARGETS PowerBoxSDK
     LIBRARY DESTINATION lib
     ARCHIVE DESTINATION lib
 )
-install(FILES PowerBoxSDK.h PowerBoxLogging.h PowerBoxSerialPort.h PowerBoxDevice.h PowerBoxProtocol.h DESTINATION include)
+install(FILES PowerBoxSDK.h PowerBoxLogging.h PowerBoxSerialPort.h PowerBoxDevice.h PinsBoxDevice.h DS18B20.h DHT22.h ADJ.h DEW.h PWM.h SPIBus.h MCP320X.h GPIOManager.h Device.h USB.h MCP4725.h TCP953X.h INA219.h BTS7XXX.h DESTINATION include)
 
 # CPack configuration for Debian package generation
 if(UNIX)

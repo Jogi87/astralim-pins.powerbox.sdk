@@ -22,533 +22,29 @@
  * SOFTWARE.
  * **************************************************************************** */
 
+#define SDK_VERSION "1.1.0"
+
 #include "PowerBoxSDK.h"
 #include "PowerBoxLogging.h"
 #include "PowerBoxDevice.h"
-#include "PowerBoxProtocol.h"
-#include "PowerBoxSerialPort.h"
-#include "arduino_base64.hpp"
-#include <map>
-#include <mutex>
-#include <thread>
-#include <memory>
-#include <string>
+#include "PinsBoxDevice.h"
 #include <cstring>
-#include <cstdio>
-#include <cstdlib>
-#include <vector>
-#include <thread>
-#include <cmath>
-#include <openssl/aes.h>
-#include <openssl/evp.h>
-#include <openssl/rand.h>
-#include <cctype>
-#include <mutex>
-#ifdef __unix__
-#include <unistd.h>
-#include <fcntl.h>
-#include <termios.h>
-#include <sys/ioctl.h>
-#include <sys/select.h>
-#include <dirent.h>
-#include <libudev.h>
-#elif defined(_WIN32)
-#include <windows.h>
-#include <setupapi.h>
-#include <devguid.h>
-#pragma comment(lib, "setupapi.lib")
-#endif
 
-#define SDK_VERSION "1.0.0"
-
-/* Handshake retry configuration */
-#define HANDSHAKE_MAX_RETRIES 5
-#define HANDSHAKE_RETRY_DELAY_MS 200
-#define HANDSHAKE_TIMEOUT 1000
-
-/* Import internal implementation for use in public C API */
 using namespace PowerBox;
-
-/* ============================================================================
- * ENCRYPTION HELPER FUNCTIONS
- * ============================================================================ */
-
-// Generate AES key and IV from UUID (matching device's GenerateAesKey)
-static void GenerateAesKeyFromUUID(const char* uuid, uint8_t* key, uint8_t startIndex)
-{
-    // UUID format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-    // Parse hex string to binary bytes first
-    uint8_t binaryUuid[16] = {0};
-    int byteIdx = 0;
-    int charIdx = 0;
-    
-    // Skip dashes and parse hex pairs
-    while (charIdx < (int)strlen(uuid) && byteIdx < 16)
-    {
-        char c = uuid[charIdx];
-        
-        if (c == '-')
-        {
-            charIdx++;
-            continue;
-        }
-        
-        // Parse two hex characters
-        if (charIdx + 1 < (int)strlen(uuid))
-        {
-            char nextc = uuid[charIdx + 1];
-            if (nextc != '-')
-            {
-                std::string hexPair = std::string(1, c) + std::string(1, nextc);
-                binaryUuid[byteIdx++] = (uint8_t)strtol(hexPair.c_str(), nullptr, 16);
-                charIdx += 2;
-                continue;
-            }
-        }
-        charIdx++;
-    }
-    
-    // Now convert bytes [startIndex : startIndex+8] to hex ASCII representation
-    // This matches device's GenerateAesKey function
-    int keyPos = 0;
-    for (uint8_t i = startIndex; i < startIndex + 8 && i < 16; i++)
-    {
-        // High nibble
-        key[keyPos++] = "0123456789ABCDEF"[binaryUuid[i] >> 4];
-        // Low nibble
-        key[keyPos++] = "0123456789ABCDEF"[binaryUuid[i] & 0x0F];
-    }
-}
-
-// Encrypt password using AES-128-CBC with PKCS7 padding
-static bool EncryptPassword(const char* plainPassword, const char* uuid, char* encryptedBase64Output)
-{
-    if (!plainPassword || !uuid || !encryptedBase64Output)
-        return false;
-    
-    EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
-    if (!ctx)
-        return false;
-
-    // Generate key and IV from UUID
-    uint8_t aesKey[16];
-    uint8_t aesIv[16];
-    
-    GenerateAesKeyFromUUID(uuid, aesKey, 0);
-    GenerateAesKeyFromUUID(uuid, aesIv, 8);
-
-    // Allocate buffer for encrypted data (plaintext + block size for padding)
-    int plainLen = strlen(plainPassword);
-    std::vector<uint8_t> encryptedBytes(plainLen + EVP_MAX_BLOCK_LENGTH);
-    int encryptedLen = 0;
-    int tempLen = 0;
-
-    // Encrypt
-    if (!EVP_EncryptInit_ex(ctx, EVP_aes_128_cbc(), nullptr, aesKey, aesIv))
-    {
-        EVP_CIPHER_CTX_free(ctx);
-        return false;
-    }
-
-    if (!EVP_EncryptUpdate(ctx, encryptedBytes.data(), &tempLen, (const uint8_t*)plainPassword, plainLen))
-    {
-        EVP_CIPHER_CTX_free(ctx);
-        return false;
-    }
-    encryptedLen = tempLen;
-
-    if (!EVP_EncryptFinal_ex(ctx, encryptedBytes.data() + encryptedLen, &tempLen))
-    {
-        EVP_CIPHER_CTX_free(ctx);
-        return false;
-    }
-    encryptedLen += tempLen;
-
-    EVP_CIPHER_CTX_free(ctx);
-
-    // Base64 encode the encrypted bytes
-    size_t encodedLen = base64::encodeLength(encryptedLen);
-    base64::encode(encryptedBytes.data(), encryptedLen, encryptedBase64Output);
-    encryptedBase64Output[encodedLen] = '\0';
-
-    return true;
-}
-
-/* Helper function to send a command and wait for the response with timeout */
-static bool SendAndWaitForReply(std::shared_ptr<PowerBox::Device> device, 
-                                const char *command,
-                                std::mutex &configMutex,
-                                std::condition_variable &configCV,
-                                std::atomic<bool> &configPending,
-                                const char *timeoutMsg,
-                                int timeoutMs = 1000)
-{
-    {
-        std::lock_guard<std::mutex> lock(configMutex);
-        configPending = true;
-    }
-
-    if (!device->port->Write((const unsigned char *)command, strlen(command)))
-    {
-        PB_DEBUG("SendAndWaitForReply: Failed to send %s command", command);
-        std::lock_guard<std::mutex> lock(configMutex);
-        configPending = false;
-        return false;
-    }
-
-    /* Wait for config to be received with specified timeout */
-    {
-        std::unique_lock<std::mutex> lock(configMutex);
-        configCV.wait_for(lock, std::chrono::milliseconds(timeoutMs),
-                         [&configPending]() { return !configPending; });
-        if (configPending)
-        {
-            PB_DEBUG("SendAndWaitForReply: Timeout waiting for %s (timeout=%dms)", timeoutMsg, timeoutMs);
-            configPending = false;
-            return false;
-        }
-    }
-
-    return true;
-}
-
-/* Helper function to send a command and wait for the response with retry mechanism */
-static bool SendAndWaitForReplyWithRetry(std::shared_ptr<PowerBox::Device> device,
-                                         const char *command,
-                                         std::mutex &configMutex,
-                                         std::condition_variable &configCV,
-                                         std::atomic<bool> &configPending,
-                                         const char *timeoutMsg,
-                                         int timeoutMs = 1000,
-                                         int maxRetries = HANDSHAKE_MAX_RETRIES,
-                                         int retryDelayMs = HANDSHAKE_RETRY_DELAY_MS)
-{
-    for (int attempt = 1; attempt <= maxRetries; ++attempt)
-    {
-        PB_DEBUG("SendAndWaitForReplyWithRetry: Attempt %d/%d for %s (timeout=%dms)", attempt, maxRetries, timeoutMsg, timeoutMs);
-
-        if (SendAndWaitForReply(device, command, configMutex, configCV, configPending, timeoutMsg, timeoutMs))
-        {
-            PB_DEBUG("SendAndWaitForReplyWithRetry: Success on attempt %d for %s", attempt, timeoutMsg);
-            return true;
-        }
-
-        if (attempt < maxRetries)
-        {
-            PB_DEBUG("SendAndWaitForReplyWithRetry: Failed on attempt %d, retrying after %d ms", attempt, retryDelayMs);
-            std::this_thread::sleep_for(std::chrono::milliseconds(retryDelayMs));
-        }
-    }
-
-    PB_DEBUG("SendAndWaitForReplyWithRetry: All %d attempts failed for %s", maxRetries, timeoutMsg);
-    return false;
-}
-
-/* ============================================================================
- * PUBLIC SDK API IMPLEMENTATION
- * ============================================================================ */
-
-PBAPI PB_ERROR_TYPE PBGetSDKVersion(char *version)
-{
-    if (!version)
-    {
-        return PB_ERROR_NULL_POINTER;
-    }
-
-    strncpy(version, SDK_VERSION, PB_VERSION_LEN - 1);
-    version[PB_VERSION_LEN - 1] = '\0';
-    return PB_SUCCESS;
-}
 
 PBAPI PB_ERROR_TYPE PBScan(int *number, int *ids)
 {
+    PB_DEBUG("PBScan: Starting device scan");
     if (!number || !ids)
     {
+        PB_ERROR("PBScan: Invalid parameters (number or ids is null)");
         return PB_ERROR_NULL_POINTER;
     }
-
-    std::lock_guard<std::mutex> lock(g_globalMutex);
-
-    // Stop telemetry and listener threads on all currently open devices
-    for (auto &pair : g_devices)
-    {
-        auto device = pair.second;
-        if (device && device->isOpen)
-        {
-            SendCommand(device, ":ES#");
-            StopStatusListener(device);
-        }
-    }
-
-    int count = 0;
-
-#ifdef __unix__
-    /* Create udev context */
-    struct udev *udev = udev_new();
-    if (!udev)
-    {
-        return PB_ERROR_COMMUNICATION;
-    }
-
-    /* Create enumeration for tty devices */
-    struct udev_enumerate *enumerate = udev_enumerate_new(udev);
-    if (!enumerate)
-    {
-        udev_unref(udev);
-        return PB_ERROR_COMMUNICATION;
-    }
-
-    /* Filter for tty subsystem */
-    udev_enumerate_add_match_subsystem(enumerate, "tty");
-    udev_enumerate_scan_devices(enumerate);
-
-    struct udev_list_entry *devices = udev_enumerate_get_list_entry(enumerate);
-    struct udev_list_entry *entry;
-
-    char response[64];
-
-    /* Iterate through all tty devices */
-    udev_list_entry_foreach(entry, devices)
-    {
-        if (count >= PB_MAX_NUM)
-            break;
-
-        const char *path = udev_list_entry_get_name(entry);
-        struct udev_device *device = udev_device_new_from_syspath(udev, path);
-        if (!device)
-        {
-            continue;
-        }
-
-        /* Get the parent USB device */
-        struct udev_device *parent = udev_device_get_parent_with_subsystem_devtype(
-            device, "usb", "usb_device");
-
-        if (!parent)
-        {
-            udev_device_unref(device);
-            continue;
-        }
-
-        /* Check VID and PID for CP210x (10c4:ea60) */
-        const char *vid = udev_device_get_sysattr_value(parent, "idVendor");
-        const char *pid = udev_device_get_sysattr_value(parent, "idProduct");
-
-        if (!vid || !pid)
-        {
-            udev_device_unref(device);
-            continue;
-        }
-
-        PB_DEBUG("Found device with VID:%s PID:%s", vid, pid);
-
-        if (strcmp(vid, "10c4") != 0 || strcmp(pid, "ea60") != 0)
-        {
-            udev_device_unref(device);
-            continue;
-        }
-
-        /* Get the device node (e.g., /dev/ttyUSB0) */
-        const char *deviceNode = udev_device_get_devnode(device);
-        if (!deviceNode)
-        {
-            udev_device_unref(device);
-            continue;
-        }
-
-        PB_DEBUG("Trying to open device: %s", deviceNode);
-
-        /* Try to open the port */
-        auto port = std::make_shared<SerialPort>();
-        if (port->Open(deviceNode))
-        {
-            PB_DEBUG("Port opened, flushing and sending command...");
-
-            auto tempDevice = std::make_shared<Device>();
-            tempDevice->port = port;
-            tempDevice->portName = deviceNode;
-
-            // Send HS to wake up device
-            SendCommand(tempDevice, ":HS#", 200);
-
-            // Start status listener thread
-            StartStatusListener(tempDevice);
-
-            // Perform handshake with retry mechanism
-            if(SendAndWaitForReplyWithRetry(tempDevice, ":HS#", tempDevice->handshakeMutex, tempDevice->handshakeCV,
-                                            tempDevice->handshakePending, "handshake"))
-            {
-                PB_DEBUG("Valid device found!");
-
-                /* Stop listener */
-                StopStatusListener(tempDevice);
-
-                /* Valid device found - close port, will be reopened in PBOpen */
-                port->Close();
-                int id = count;
-                g_devices[id] = tempDevice;
-                ids[count] = id;
-                count++;
-            }
-            else
-            {
-                PB_DEBUG("No response from device after handshake retries");
-                /* Not a valid device, close port */
-                port->Close();
-            }
-        }
-        else
-        {
-            PB_DEBUG("Failed to open port %s", deviceNode);
-        }
-
-        udev_device_unref(device);
-    }
-
-    /* Clean up udev resources */
-    udev_enumerate_unref(enumerate);
-    udev_unref(udev);
-#elif defined(_WIN32)
-    PB_DEBUG("PBScan: Enumerating serial ports on Windows");
-
-    // Enumerate devices in the Ports class and look for USB devices with matching VID/PID
-    HDEVINFO hDevInfo = SetupDiGetClassDevsA(&GUID_DEVCLASS_PORTS, NULL, NULL, DIGCF_PRESENT);
-    if (hDevInfo == INVALID_HANDLE_VALUE)
-    {
-        PB_DEBUG("SetupDiGetClassDevs failed");
-        *number = 0;
-        return PB_SUCCESS;
-    }
-
-    for (DWORD idx = 0; count < PB_MAX_NUM; ++idx)
-    {
-        SP_DEVINFO_DATA devInfo;
-        devInfo.cbSize = sizeof(devInfo);
-        if (!SetupDiEnumDeviceInfo(hDevInfo, idx, &devInfo))
-        {
-            DWORD err = GetLastError();
-            if (err == ERROR_NO_MORE_ITEMS)
-                break;
-            else
-                continue;
-        }
-
-        // Try to get the device instance ID (contains VID/PID for USB-serial)
-        char instanceId[512] = {0};
-        if (!SetupDiGetDeviceInstanceIdA(hDevInfo, &devInfo, instanceId, (DWORD)sizeof(instanceId), NULL))
-        {
-            // ignore
-        }
-
-        // Look for VID_10C4 and PID_EA60 in instance ID (case-insensitive)
-        bool isTarget = false;
-        if (instanceId[0])
-        {
-            std::string iid(instanceId);
-            for (auto &c : iid) c = (char)toupper((unsigned char)c);
-            if (iid.find("VID_10C4") != std::string::npos && iid.find("PID_EA60") != std::string::npos)
-            {
-                isTarget = true;
-            }
-        }
-
-        if (!isTarget)
-            continue;
-
-        // Try to extract COM port name. First try PortName from device registry, fallback to FriendlyName
-        char portName[128] = {0};
-
-        HKEY hKey = SetupDiOpenDevRegKey(hDevInfo, &devInfo, DICS_FLAG_GLOBAL, 0, DIREG_DEV, KEY_READ);
-        if (hKey != INVALID_HANDLE_VALUE)
-        {
-            DWORD type = 0;
-            DWORD cb = (DWORD)sizeof(portName);
-            if (RegQueryValueExA(hKey, "PortName", NULL, &type, (LPBYTE)portName, &cb) == ERROR_SUCCESS)
-            {
-                // portName now contains e.g. "COM3"
-            }
-            RegCloseKey(hKey);
-        }
-
-        if (!portName[0])
-        {
-            // Fallback: get friendly name and parse (e.g., "USB-SERIAL CH340 (COM3)")
-            char friendly[256] = {0};
-            if (SetupDiGetDeviceRegistryPropertyA(hDevInfo, &devInfo, SPDRP_FRIENDLYNAME, NULL, (PBYTE)friendly, (DWORD)sizeof(friendly), NULL))
-            {
-                char *p = strstr(friendly, "(COM");
-                if (p)
-                {
-                    char *q = strchr(p, ')');
-                    if (q && q > p)
-                    {
-                        size_t len = (size_t)(q - p - 1); // skip '(' and ')'
-                        if (len < sizeof(portName))
-                        {
-                            // p points to "(COM3" so copy from p+1
-                            strncpy(portName, p + 1, len);
-                            portName[len] = '\0';
-                        }
-                    }
-                }
-            }
-        }
-
-        if (!portName[0])
-            continue; // can't determine COM port
-
-        PB_DEBUG("Found target device instance=%s port=%s", instanceId, portName);
-
-        // Try to open the port and perform handshake
-        std::string deviceNode = std::string(portName); // SerialPort_win handles COM prefix for CreateFile
-        auto port = std::make_shared<SerialPort>();
-        if (port->Open(deviceNode.c_str()))
-        {
-            PB_DEBUG("Port opened, flushing and sending command...");
-
-            auto tempDevice = std::make_shared<Device>();
-            tempDevice->port = port;
-            tempDevice->portName = deviceNode;
-
-            // Send HS to wake up device
-            SendCommand(tempDevice, ":HS#", 200);
-
-            // Start status listener thread
-            StartStatusListener(tempDevice);
-
-            // Perform handshake with retry mechanism
-            if(SendAndWaitForReplyWithRetry(tempDevice, ":HS#", tempDevice->handshakeMutex, tempDevice->handshakeCV,
-                                            tempDevice->handshakePending, "handshake"))
-            {
-                PB_DEBUG("Valid device found!");
-
-                /* Stop listener */
-                StopStatusListener(tempDevice);
-
-                /* Valid device found - close port, will be reopened in PBOpen */
-                port->Close();
-                int id = count;
-                g_devices[id] = tempDevice;
-                ids[count] = id;
-                count++;
-            }
-            else
-            {
-                PB_DEBUG("No response from device after handshake retries");
-                port->Close();
-            }
-        }
-        else
-        {
-            PB_DEBUG("Failed to open port %s", portName);
-        }
-    }
-
-    SetupDiDestroyDeviceInfoList(hDevInfo);
-#endif
-
-    *number = count;
-    return PB_SUCCESS;
+    *number = ScanPinsBox(ids) ? 1 : 0;
+    PB_DEBUG("PBScan: Found %d PinsBox device(s)", *number);
+    PB_ERROR_TYPE result = ScanPowerBox(number, ids);
+    PB_DEBUG("PBScan: Total devices found: %d", *number);
+    return result;
 }
 
 PBAPI PB_ERROR_TYPE PBOpen(int id)
@@ -564,143 +60,34 @@ PBAPI PB_ERROR_TYPE PBOpen(int id)
     }
 
     auto device = it->second;
-    PB_DEBUG("PBOpen: Found device, portName=%s", device->portName.c_str());
-
-    /* Create a new SerialPort instance and open it */
-    if (!device->port)
-    {
-        PB_DEBUG("PBOpen: Creating new SerialPort instance");
-        device->port = std::make_shared<SerialPort>();
-    }
-
-    PB_DEBUG("PBOpen: Attempting to open port %s", device->portName.c_str());
-    if (!device->port->Open(device->portName.c_str()))
-    {
-        PB_ERROR("PBOpen: Failed to open port");
-        return PB_ERROR_COMMUNICATION;
-    }
-
-    PB_DEBUG("PBOpen: Port opened successfully, performing handshake");
-
-    // Send HS to wake up device
-    SendCommand(device, ":HS#", 200);
-
-    // Start status listener thread
-    StartStatusListener(device);
-
-    // Perform handshake with retry mechanism
-    if(!SendAndWaitForReplyWithRetry(device, ":HS#", device->handshakeMutex, device->handshakeCV,
-                                     device->handshakePending, "handshake"))
-    {
-        PB_ERROR("PBOpen: Handshake failed after retries");
-        device->port->Close();
-        return PB_ERROR_COMMUNICATION;
-    }
-
-    // Fetch ENV config
-    if(!SendAndWaitForReply(device, ":GES#", device->envModelMutex, device->envModelCV,
-                            device->envModelPending, "environment model"))
-    {
-        PB_ERROR("PBOpen: Failed to fetch environment model");
-        return PB_ERROR_COMMUNICATION;
-    }
-
-    // Fetch update rate
-    if(!SendAndWaitForReply(device, ":GUR#", device->updateRateMutex, device->updateRateCV,
-                            device->updateRatePending, "update rate"))
-    {
-        PB_ERROR("PBOpen: Failed to fetch update rate");
-        return PB_ERROR_COMMUNICATION;
-    }
-
-    // Fetch PWR config
-    if(!SendAndWaitForReply(device, ":GPS#", device->pwrConfigMutex, device->pwrConfigCV,
-                            device->pwrConfigPending, "power port config"))
-    {
-        PB_ERROR("PBOpen: Failed to fetch power port config");
-        return PB_ERROR_COMMUNICATION;
-    }
-
-    // Fetch USB config
-    if(!SendAndWaitForReply(device, ":GUS#", device->usbConfigMutex, device->usbConfigCV, 
-                            device->usbConfigPending, "usb port config"))
-    {
-        PB_ERROR("PBOpen: Failed to fetch usb port config");
-        return PB_ERROR_COMMUNICATION;
-    }
-
-    // Fetch DEW config
-    if(!SendAndWaitForReply(device, ":GDS#", device->dewConfigMutex, device->dewConfigCV,
-                            device->dewConfigPending, "dew port config"))
-    {
-        PB_ERROR("PBOpen: Failed to fetch dew port config");
-        return PB_ERROR_COMMUNICATION;
-    }
-
-    // Fetch ADJ config
-    if(!SendAndWaitForReply(device, ":GAS#", device->adjConfigMutex, device->adjConfigCV,
-                            device->adjConfigPending, "adj port config"))
-    {
-        PB_ERROR("PBOpen: Failed to fetch adj port config");
-        return PB_ERROR_COMMUNICATION;
-    }
-
-    // Fetch WiFi info
-    if(!SendAndWaitForReply(device, ":GWI#", device->wifiInfoMutex, device->wifiInfoCV,
-                            device->wifiInfoPending, "WiFi info"))
-    {
-        PB_ERROR("PBOpen: Failed to fetch WiFi info");
-        return PB_ERROR_COMMUNICATION;
-    }
-
-    // Start telemetry
-    if (!SendCommand(device, ":BS#"))
-    {
-        PB_ERROR("PBOpen: Failed to start telemetry");
-        StopStatusListener(device);
-        device->port->Close();
-        return PB_ERROR_COMMUNICATION;
-    }
-
-    device->isOpen = true;
-    PB_INFO("[OK] Device opened");
-    return PB_SUCCESS;
+    return device->Open();
 }
 
 PBAPI PB_ERROR_TYPE PBClose(int id)
 {
+    PB_DEBUG("PBClose: Closing device id=%d", id);
     std::lock_guard<std::mutex> lock(g_globalMutex);
 
     auto it = g_devices.find(id);
     if (it == g_devices.end())
     {
+        PB_ERROR("PBClose: Device id=%d not found", id);
         return PB_ERROR_INVALID_ID;
     }
 
     auto device = it->second;
+    device->Close();
+    PB_DEBUG("PBClose: Device id=%d closed successfully", id);
 
-    // Stop telemetry
-    if (device->port && device->port->IsOpen())
-    {
-        SendCommand(device, ":ES#");
-    }
-
-    StopStatusListener(device);
-
-    if (device->port)
-    {
-        device->port->Close();
-    }
-
-    device->isOpen = false;
-    PB_INFO("[OK] Device closed");
     return PB_SUCCESS;
 }
 
 PBAPI PB_ERROR_TYPE PBGetSerial(int id, char *serial)
 {
+    PB_DEBUG("PBGetSerial: Getting serial for device id=%d", id);
     if (!serial)
     {
+        PB_ERROR("PBGetSerial: serial pointer is null");
         return PB_ERROR_NULL_POINTER;
     }
 
@@ -709,20 +96,26 @@ PBAPI PB_ERROR_TYPE PBGetSerial(int id, char *serial)
     auto it = g_devices.find(id);
     if (it == g_devices.end())
     {
+        PB_ERROR("PBGetSerial: Device id=%d not found", id);
         return PB_ERROR_INVALID_ID;
     }
 
     auto device = it->second;
-    strncpy(serial, device->serial.c_str(), PB_VERSION_LEN - 1);
+    std::string deviceSerial = device->GetSerial();
+
+    strncpy(serial, deviceSerial.c_str(), PB_VERSION_LEN - 1);
     serial[PB_VERSION_LEN - 1] = '\0';
+    PB_DEBUG("PBGetSerial: Serial=%s", serial);
 
     return PB_SUCCESS;
 }
 
-PBAPI PB_ERROR_TYPE PBGetConfig(int id, PB_DEVICE_CONFIG *config)
+PBAPI PB_ERROR_TYPE PBScanWiFi(int id, PB_WIFI_SCAN_RESULT *result)
 {
-    if (!config)
+    PB_DEBUG("PBScanWiFi: Scanning WiFi networks for device id=%d", id);
+    if (!result)
     {
+        PB_ERROR("PBScanWiFi: result pointer is null");
         return PB_ERROR_NULL_POINTER;
     }
 
@@ -731,23 +124,61 @@ PBAPI PB_ERROR_TYPE PBGetConfig(int id, PB_DEVICE_CONFIG *config)
     auto it = g_devices.find(id);
     if (it == g_devices.end())
     {
+        PB_ERROR("PBScanWiFi: Device id=%d not found", id);
+        return PB_ERROR_INVALID_ID;
+    }
+
+    auto device = it->second;
+    auto state = device->ScanWiFi(result);
+
+    if(state == PB_ERROR_NOT_AVAILABLE)
+    {
+        result->count = 0;
+    }
+    else
+    {
+        PB_DEBUG("PBScanWiFi: WiFi scan completed");
+    }
+
+    return state;
+}
+
+PBAPI PB_ERROR_TYPE PBGetConfig(int id, PB_DEVICE_CONFIG *config)
+{
+    PB_DEBUG("PBGetConfig: Getting device config for id=%d", id);
+    if (!config)
+    {
+        PB_ERROR("PBGetConfig: config pointer is null");
+        return PB_ERROR_NULL_POINTER;
+    }
+
+    std::lock_guard<std::mutex> lock(g_globalMutex);
+
+    auto it = g_devices.find(id);
+    if (it == g_devices.end())
+    {
+        PB_ERROR("PBGetConfig: Device id=%d not found", id);
         return PB_ERROR_INVALID_ID;
     }
 
     auto device = it->second;
 
-    config->temperatureOffset = device->temperatureOffset;
-    config->humidityOffset = device->humidityOffset;
-    config->envUpdateRate = device->envUpdateRate;
-    config->updateRate = device->updateRate;
+    config->temperatureOffset = device->GetTemperatureOffset();
+    config->humidityOffset = device->GetHumidityOffset();
+    config->envUpdateRate = device->GetEnvUpdateRate();
+    config->updateRate = device->GetUpdateRate();
+    PB_DEBUG("PBGetConfig: tempOffset=%.2f, humiOffset=%.2f, envRate=%d, updateRate=%d",
+             config->temperatureOffset, config->humidityOffset, config->envUpdateRate, config->updateRate);
 
     return PB_SUCCESS;
 }
 
 PBAPI PB_ERROR_TYPE PBSetConfig(int id, PB_DEVICE_CONFIG *config)
 {
+    PB_DEBUG("PBSetConfig: Setting device config for id=%d, mask=0x%X", id, config ? config->mask : 0);
     if (!config)
     {
+        PB_ERROR("PBSetConfig: config pointer is null");
         return PB_ERROR_NULL_POINTER;
     }
 
@@ -756,6 +187,7 @@ PBAPI PB_ERROR_TYPE PBSetConfig(int id, PB_DEVICE_CONFIG *config)
     auto it = g_devices.find(id);
     if (it == g_devices.end())
     {
+        PB_ERROR("PBSetConfig: Device id=%d not found", id);
         return PB_ERROR_INVALID_ID;
     }
 
@@ -765,113 +197,96 @@ PBAPI PB_ERROR_TYPE PBSetConfig(int id, PB_DEVICE_CONFIG *config)
     {
         if (config->temperatureOffset < -12.5f || config->temperatureOffset > 12.5f)
         {
+            PB_ERROR("PBSetConfig: Temperature offset %.2f out of range [-12.5, 12.5]", config->temperatureOffset);
             return PB_ERROR_INVALID_PARAMETER;
         }
 
-        // Send command
-        char cmd[16];
-        snprintf(cmd, sizeof(cmd), ":SET%f#", config->temperatureOffset);
-
-        if (!SendCommand(device, cmd))
+        if(!device->SetTemperatureOffset(config->temperatureOffset))
         {
+            PB_ERROR("PBSetConfig: Failed to set temperature offset");
             return PB_ERROR_COMMUNICATION;
         }
-
-        device->temperatureOffset = config->temperatureOffset;
+        PB_DEBUG("PBSetConfig: Temperature offset set to %.2f", config->temperatureOffset);
     }
 
     if(config->mask & MASK_PB_HUMIDITY_OFFSET)
     {
         if(config->humidityOffset < -12.5f || config->humidityOffset > 12.5f)
         {
+            PB_ERROR("PBSetConfig: Humidity offset %.2f out of range [-12.5, 12.5]", config->humidityOffset);
             return PB_ERROR_INVALID_PARAMETER;
         }
 
-        // Send command
-        char cmd[16];
-        snprintf(cmd, sizeof(cmd), ":SEH%f#", config->humidityOffset);
-
-        if (!SendCommand(device, cmd))
+        if(!device->SetHumidityOffset(config->humidityOffset))
         {
+            PB_ERROR("PBSetConfig: Failed to set humidity offset");
             return PB_ERROR_COMMUNICATION;
         }
-
-        device->humidityOffset = config->humidityOffset;
+        PB_DEBUG("PBSetConfig: Humidity offset set to %.2f", config->humidityOffset);
     }
 
     if(config->mask & MASK_PB_ENV_UPDATE_RATE)
     {
         if(config->envUpdateRate < 1 || config->envUpdateRate > 60)
         {
+            PB_ERROR("PBSetConfig: Environment update rate %d out of range [1, 60]", config->envUpdateRate);
             return PB_ERROR_INVALID_PARAMETER;
         }
 
-        // Send command
-        char cmd[16];
-        snprintf(cmd, sizeof(cmd), ":SEU%d#", config->envUpdateRate);
-
-        if (!SendCommand(device, cmd))
+        if (!device->SetEnvUpdateRate(config->envUpdateRate))
         {
+            PB_ERROR("PBSetConfig: Failed to set environment update rate");
             return PB_ERROR_COMMUNICATION;
         }
-
-        device->envUpdateRate = config->envUpdateRate;
+        PB_DEBUG("PBSetConfig: Environment update rate set to %d", config->envUpdateRate);
     }
 
     if(config->mask & MASK_PB_UPDATE_RATE)
     {
         if(config->updateRate < 1 || config->updateRate > 60)
         {
+            PB_ERROR("PBSetConfig: Update rate %d out of range [1, 60]", config->updateRate);
             return PB_ERROR_INVALID_PARAMETER;
         }
 
-        // Send command
-        char cmd[16];
-        snprintf(cmd, sizeof(cmd), ":SUR%d#", config->updateRate);
-
-        if (!SendCommand(device, cmd))
+        if (!device->SetUpdateRate(config->updateRate))
         {
+            PB_ERROR("PBSetConfig: Failed to set update rate");
             return PB_ERROR_COMMUNICATION;
         }
-
-        device->updateRate = config->updateRate;
+        PB_DEBUG("PBSetConfig: Update rate set to %d", config->updateRate);
     }
 
     if(config->mask & MASK_PB_EXT_TEMPERATURE)
     {
-        // Send command
-        char cmd[16];
-        snprintf(cmd, sizeof(cmd), ":SCT%f#", config->temperature);
-
-        if(!SendCommand(device, cmd))
+        if(!device->SetExtTemperature(config->temperature))
         {
+            PB_ERROR("PBSetConfig: Failed to set external temperature");
             return PB_ERROR_COMMUNICATION;
         }
-
-        device->temperature = config->temperature;
+        PB_DEBUG("PBSetConfig: External temperature set to %.2f", config->temperature);
     }
 
     if(config->mask & MASK_PB_EXT_HUMIDITY)
     {
-        // Send command
-        char cmd[16];
-        snprintf(cmd, sizeof(cmd), ":SCH%f#", config->humidity);
-
-        if(!SendCommand(device, cmd))
+        if(!device->SetExtHumidity(config->humidity))
         {
+            PB_ERROR("PBSetConfig: Failed to set external humidity");
             return PB_ERROR_COMMUNICATION;
         }
-
-        device->humidity = config->humidity;
+        PB_DEBUG("PBSetConfig: External humidity set to %.2f", config->humidity);
     }
 
+    PB_DEBUG("PBSetConfig: Configuration updated successfully");
     return PB_SUCCESS;
 }
 
 PBAPI PB_ERROR_TYPE PBGetPowerPortConfig(int id, PB_POWER_PORT_CONFIG *config)
 {
+    PB_DEBUG("PBGetPowerPortConfig: Getting power port config for device id=%d", id);
     if (!config)
     {
+        PB_ERROR("PBGetPowerPortConfig: config pointer is null");
         return PB_ERROR_NULL_POINTER;
     }
 
@@ -880,27 +295,32 @@ PBAPI PB_ERROR_TYPE PBGetPowerPortConfig(int id, PB_POWER_PORT_CONFIG *config)
     auto it = g_devices.find(id);
     if (it == g_devices.end())
     {
+        PB_ERROR("PBGetPowerPortConfig: Device id=%d not found", id);
         return PB_ERROR_INVALID_ID;
     }
 
     auto device = it->second;
     auto idx = config->index;
 
-    if(idx >= PB_NUM_POWER_PORTS)
+    if(idx >= device->GetNumPowerPorts())
     {
+        PB_ERROR("PBGetPowerPortConfig: Port index %d out of range [0, %d)", idx, device->GetNumPowerPorts());
         return PB_ERROR_INVALID_PARAMETER;
     }
 
-    config->enabled = device->powerState[idx] != 0;
-    config->bootState = device->powerBootstrap[idx] != 0;
+    config->enabled = device->GetPowerState(idx) != 0;
+    config->bootState = device->GetPowerBootState(idx) != 0;
+    PB_DEBUG("PBGetPowerPortConfig: Port %d enabled=%d, bootState=%d", idx, config->enabled, config->bootState);
 
     return PB_SUCCESS;
 }
 
 PBAPI PB_ERROR_TYPE PBSetPowerPortConfig(int id, PB_POWER_PORT_CONFIG *config)
 {
+    PB_DEBUG("PBSetPowerPortConfig: Setting power port config for device id=%d", id);
     if (!config)
     {
+        PB_ERROR("PBSetPowerPortConfig: config pointer is null");
         return PB_ERROR_NULL_POINTER;
     }
 
@@ -909,56 +329,47 @@ PBAPI PB_ERROR_TYPE PBSetPowerPortConfig(int id, PB_POWER_PORT_CONFIG *config)
     auto it = g_devices.find(id);
     if (it == g_devices.end())
     {
+        PB_ERROR("PBSetPowerPortConfig: Device id=%d not found", id);
         return PB_ERROR_INVALID_ID;
     }
 
     auto device = it->second;
     auto idx = config->index;
 
-    if(idx == 0 || idx >= PB_NUM_POWER_PORTS)
+    if(idx == 0 || idx >= device->GetNumPowerPorts())
     {
-        // Port 0 is always on and not configurable
+        PB_ERROR("PBSetPowerPortConfig: Port %d invalid (port 0 not configurable or out of range)", idx);
         return PB_ERROR_INVALID_PARAMETER;
     }
 
     if (config->mask & MASK_PORT_ENABLE)
     {
-        // Send command
-        char cmd[16];
-        snprintf(cmd, sizeof(cmd), ":SPS%d%d#", config->index, config->enabled != 0);
-
-        if (!SendCommand(device, cmd))
+        if (!device->SetPowerState(config->index, config->enabled))
         {
+            PB_ERROR("PBSetPowerPortConfig: Failed to set power state on port %d", config->index);
             return PB_ERROR_COMMUNICATION;
         }
-
-        device->powerState[idx] = config->enabled != 0;
+        PB_DEBUG("PBSetPowerPortConfig: Port %d enabled=%d", config->index, config->enabled);
     }
 
     if(config->mask & MASK_PORT_BOOT_STATE)
     {
-        // Send command
-        char cmd[16];
-        snprintf(cmd, sizeof(cmd), ":SPB%d%d#", config->index, config->bootState != 0);
-
-        if (!SendCommand(device, cmd))
+        if (!device->SetPowerBootState(config->index, config->bootState))
         {
+            PB_ERROR("PBSetPowerPortConfig: Failed to set boot state on port %d", config->index);
             return PB_ERROR_COMMUNICATION;
         }
-
-        device->powerBootstrap[idx] = config->bootState != 0;
+        PB_DEBUG("PBSetPowerPortConfig: Port %d bootState=%d", config->index, config->bootState);
     }
 
     if(config->mask & MASK_PORT_OVERCURRENT_RESET)
     {
-        // Send command
-        char cmd[16];
-        snprintf(cmd, sizeof(cmd), ":SPO%d#", config->index);
-
-        if (!SendCommand(device, cmd))
+        if (!device->ResetPowerOvercurrent(config->index))
         {
+            PB_ERROR("PBSetPowerPortConfig: Failed to reset overcurrent on port %d", config->index);
             return PB_ERROR_COMMUNICATION;
         }
+        PB_DEBUG("PBSetPowerPortConfig: Overcurrent reset on port %d", config->index);
     }
 
     return PB_SUCCESS;
@@ -966,8 +377,10 @@ PBAPI PB_ERROR_TYPE PBSetPowerPortConfig(int id, PB_POWER_PORT_CONFIG *config)
 
 PBAPI PB_ERROR_TYPE PBGetUSBPortConfig(int id, PB_USB_PORT_CONFIG *config)
 {
+    PB_DEBUG("PBGetUSBPortConfig: Getting USB port config for device id=%d", id);
     if (!config)
     {
+        PB_ERROR("PBGetUSBPortConfig: config pointer is null");
         return PB_ERROR_NULL_POINTER;
     }
 
@@ -976,27 +389,32 @@ PBAPI PB_ERROR_TYPE PBGetUSBPortConfig(int id, PB_USB_PORT_CONFIG *config)
     auto it = g_devices.find(id);
     if (it == g_devices.end())
     {
+        PB_ERROR("PBGetUSBPortConfig: Device id=%d not found", id);
         return PB_ERROR_INVALID_ID;
     }
 
     auto device = it->second;
     auto idx = config->index;
 
-    if(idx >= PB_NUM_USB_PORTS)
+    if(idx >= device->GetNumUSBPorts())
     {
+        PB_ERROR("PBGetUSBPortConfig: Port index %d out of range [0, %d)", idx, device->GetNumUSBPorts());
         return PB_ERROR_INVALID_PARAMETER;
     }
 
-    config->enabled = device->usbState[idx] != 0;
-    config->bootState = device->usbBootstrap[idx] != 0;
+    config->enabled = device->GetUSBState(idx) != 0;
+    config->bootState = device->GetUSBBootState(idx) != 0;
+    PB_DEBUG("PBGetUSBPortConfig: Port %d enabled=%d, bootState=%d", idx, config->enabled, config->bootState);
 
     return PB_SUCCESS;
 }
 
 PBAPI PB_ERROR_TYPE PBSetUSBPortConfig(int id, PB_USB_PORT_CONFIG *config)
 {
+    PB_DEBUG("PBSetUSBPortConfig: Setting USB port config for device id=%d", id);
     if (!config)
     {
+        PB_ERROR("PBSetUSBPortConfig: config pointer is null");
         return PB_ERROR_NULL_POINTER;
     }
 
@@ -1005,55 +423,47 @@ PBAPI PB_ERROR_TYPE PBSetUSBPortConfig(int id, PB_USB_PORT_CONFIG *config)
     auto it = g_devices.find(id);
     if (it == g_devices.end())
     {
+        PB_ERROR("PBSetUSBPortConfig: Device id=%d not found", id);
         return PB_ERROR_INVALID_ID;
     }
 
     auto device = it->second;
     auto idx = config->index;
 
-    if(idx >= PB_NUM_USB_PORTS)
+    if(idx >= device->GetNumUSBPorts())
     {
+        PB_ERROR("PBSetUSBPortConfig: Port index %d out of range [0, %d)", idx, device->GetNumUSBPorts());
         return PB_ERROR_INVALID_PARAMETER;
     }
 
     if (config->mask & MASK_PORT_ENABLE)
     {
-        // Send command
-        char cmd[16];
-        snprintf(cmd, sizeof(cmd), ":SUS%d%d#", config->index, config->enabled != 0);
-
-        if (!SendCommand(device, cmd))
+        if (!device->SetUSBState(config->index, config->enabled))
         {
+            PB_ERROR("PBSetUSBPortConfig: Failed to set USB state on port %d", config->index);
             return PB_ERROR_COMMUNICATION;
         }
-
-        device->usbState[idx] = config->enabled != 0;
+        PB_DEBUG("PBSetUSBPortConfig: Port %d enabled=%d", config->index, config->enabled);
     }
 
     if(config->mask & MASK_PORT_BOOT_STATE)
     {
-        // Send command
-        char cmd[16];
-        snprintf(cmd, sizeof(cmd), ":SUB%d%d#", config->index, config->bootState != 0);
-
-        if (!SendCommand(device, cmd))
+        if (!device->SetUSBBootState(config->index, config->bootState))
         {
+            PB_ERROR("PBSetUSBPortConfig: Failed to set boot state on port %d", config->index);
             return PB_ERROR_COMMUNICATION;
         }
-
-        device->usbBootstrap[idx] = config->bootState != 0;
+        PB_DEBUG("PBSetUSBPortConfig: Port %d bootState=%d", config->index, config->bootState);
     }
 
     if(config->mask & MASK_PORT_OVERCURRENT_RESET)
     {
-        // Send command
-        char cmd[16];
-        snprintf(cmd, sizeof(cmd), ":SUO%d#", config->index);
-
-        if (!SendCommand(device, cmd))
+        if (!device->ResetUSBOvercurrent(config->index))
         {
+            PB_ERROR("PBSetUSBPortConfig: Failed to reset overcurrent on port %d", config->index);
             return PB_ERROR_COMMUNICATION;
         }
+        PB_DEBUG("PBSetUSBPortConfig: Overcurrent reset on port %d", config->index);
     }
 
     return PB_SUCCESS;
@@ -1061,8 +471,10 @@ PBAPI PB_ERROR_TYPE PBSetUSBPortConfig(int id, PB_USB_PORT_CONFIG *config)
 
 PBAPI PB_ERROR_TYPE PBGetDewPortConfig(int id, PB_DEW_PORT_CONFIG *config)
 {
+    PB_DEBUG("PBGetDewPortConfig: Getting dew port config for device id=%d", id);
     if (!config)
     {
+        PB_ERROR("PBGetDewPortConfig: config pointer is null");
         return PB_ERROR_NULL_POINTER;
     }
 
@@ -1071,29 +483,35 @@ PBAPI PB_ERROR_TYPE PBGetDewPortConfig(int id, PB_DEW_PORT_CONFIG *config)
     auto it = g_devices.find(id);
     if (it == g_devices.end())
     {
+        PB_ERROR("PBGetDewPortConfig: Device id=%d not found", id);
         return PB_ERROR_INVALID_ID;
     }
 
     auto device = it->second;
     auto idx = config->index;
 
-    if(idx >= PB_NUM_DEW_PORTS)
+    if(idx >= device->GetNumDewPorts())
     {
+        PB_ERROR("PBGetDewPortConfig: Port index %d out of range [0, %d)", idx, device->GetNumDewPorts());
         return PB_ERROR_INVALID_PARAMETER;
     }
 
-    config->enabled = device->dewState[idx] != 0;
-    config->autoMode = device->dewAuto[idx] != 0;
-    config->autoThreshold = device->dewThreshold[idx];
-    config->power = device->dewPWM[idx];
+    config->enabled = device->GetDewState(idx) != 0;
+    config->autoMode = device->GetDewAutoMode(idx) != 0;
+    config->autoThreshold = device->GetDewAutoThreshold(idx);
+    config->power = device->GetDewPWMPower(idx);
+    PB_DEBUG("PBGetDewPortConfig: Port %d enabled=%d, autoMode=%d, threshold=%.2f, power=%d",
+             idx, config->enabled, config->autoMode, config->autoThreshold, config->power);
 
     return PB_SUCCESS;
 }
 
 PBAPI PB_ERROR_TYPE PBSetDewPortConfig(int id, PB_DEW_PORT_CONFIG *config)
 {
+    PB_DEBUG("PBSetDewPortConfig: Setting dew port config for device id=%d", id);
     if (!config)
     {
+        PB_ERROR("PBSetDewPortConfig: config pointer is null");
         return PB_ERROR_NULL_POINTER;
     }
 
@@ -1102,195 +520,67 @@ PBAPI PB_ERROR_TYPE PBSetDewPortConfig(int id, PB_DEW_PORT_CONFIG *config)
     auto it = g_devices.find(id);
     if (it == g_devices.end())
     {
+        PB_ERROR("PBSetDewPortConfig: Device id=%d not found", id);
         return PB_ERROR_INVALID_ID;
     }
 
     auto device = it->second;
     auto idx = config->index;
 
-    if(idx >= PB_NUM_DEW_PORTS)
+    if(idx >= device->GetNumDewPorts())
     {
+        PB_ERROR("PBSetDewPortConfig: Port index %d out of range [0, %d)", idx, device->GetNumDewPorts());
         return PB_ERROR_INVALID_PARAMETER;
     }
 
     // State and power is set with a single call, need to combine
-    int newState = (config->mask & MASK_PORT_ENABLE) ? (config->enabled != 0) : device->dewState[idx];
-    int newPower = (config->mask & MASK_PORT_POWER) ? config->power : device->dewPWM[idx];
+    int newState = (config->mask & MASK_PORT_ENABLE) ? (config->enabled != 0) : device->GetDewState(idx);
+    int newPower = (config->mask & MASK_PORT_POWER) ? config->power : device->GetDewPWMPower(idx);
 
     if (config->mask & MASK_PORT_ENABLE || config->mask & MASK_PORT_POWER)
     {
-        // Send command
-        char cmd[16];
-        snprintf(cmd, sizeof(cmd), ":SDS%d%d%d#", config->index, newState != 0, newPower);
-
-        if (!SendCommand(device, cmd))
+        if (!device->SetDewState(config->index, newState, newPower))
         {
+            PB_ERROR("PBSetDewPortConfig: Failed to set dew state on port %d", config->index);
             return PB_ERROR_COMMUNICATION;
         }
-
-        device->dewState[idx] = newState != 0;
-        device->dewPWM[idx] = newPower;
+        PB_DEBUG("PBSetDewPortConfig: Port %d state=%d, power=%d", config->index, newState, newPower);
     }
 
     if (config->mask & MASK_PORT_AUTO_DEW_MODE)
     {
-        // Send command
-        char cmd[16];
-        snprintf(cmd, sizeof(cmd), ":SDB%d%d#", config->index, config->autoMode != 0);
-
-        if (!SendCommand(device, cmd))
+        if (!device->SetDewAutoMode(config->index, config->autoMode))
         {
+            PB_ERROR("PBSetDewPortConfig: Failed to set auto mode on port %d", config->index);
             return PB_ERROR_COMMUNICATION;
         }
-
-        device->dewAuto[idx] = config->autoMode != 0;
+        PB_DEBUG("PBSetDewPortConfig: Port %d autoMode=%d", config->index, config->autoMode);
     }
 
     if (config->mask & MASK_PORT_AUTO_DEW_THRESHOLD)
     {
         if (config->autoThreshold < 0.0f || config->autoThreshold > 25.5f)
         {
+            PB_ERROR("PBSetDewPortConfig: Auto threshold %.2f out of range [0, 25.5]", config->autoThreshold);
             return PB_ERROR_INVALID_PARAMETER;
         }
 
-        // Send command
-        char cmd[16];
-        snprintf(cmd, sizeof(cmd), ":SDT%d%f#", config->index, config->autoThreshold);
-
-        if (!SendCommand(device, cmd))
+        if (!device->SetDewAutoThreshold(config->index, config->autoThreshold))
         {
+            PB_ERROR("PBSetDewPortConfig: Failed to set auto threshold on port %d", config->index);
             return PB_ERROR_COMMUNICATION;
         }
-
-        device->dewThreshold[idx] = config->autoThreshold;
+        PB_DEBUG("PBSetDewPortConfig: Port %d autoThreshold=%.2f", config->index, config->autoThreshold);
     }
 
     if(config->mask & MASK_PORT_OVERCURRENT_RESET)
     {
-        // Send command
-        char cmd[16];
-        snprintf(cmd, sizeof(cmd), ":SDO%d#", config->index);
-
-        if (!SendCommand(device, cmd))
+        if (!device->ResetDewOvercurrent(config->index))
         {
+            PB_ERROR("PBSetDewPortConfig: Failed to reset overcurrent on port %d", config->index);
             return PB_ERROR_COMMUNICATION;
         }
-    }
-
-    return PB_SUCCESS;
-}
-
-PBAPI PB_ERROR_TYPE PBSetBuckPortConfig(int id, PB_BUCK_PORT_CONFIG *config)
-{
-    if (!config)
-    {
-        return PB_ERROR_NULL_POINTER;
-    }
-
-    std::lock_guard<std::mutex> lock(g_globalMutex);
-
-    auto it = g_devices.find(id);
-    if (it == g_devices.end())
-    {
-        return PB_ERROR_INVALID_ID;
-    }
-
-    auto device = it->second;
-
-    // State and power is set with a single call, need to combine
-    int newState = (config->mask & MASK_PORT_ENABLE) ? (config->enabled != 0) : device->buckState;
-    int newTarget = ((config->mask & MASK_PORT_VOLTAGE) ? config->targetVoltage : device->buckVset) * 1000.0f;
-
-    if (config->mask & MASK_PORT_ENABLE || config->mask & MASK_PORT_VOLTAGE)
-    {
-        // Send command
-        char cmd[16];
-        snprintf(cmd, sizeof(cmd), ":SAS0%d%d#", newState != 0, newTarget);
-
-        if (!SendCommand(device, cmd))
-        {
-            return PB_ERROR_COMMUNICATION;
-        }
-
-        device->buckState = newState != 0;
-        device->buckVset = newTarget;
-    }
-
-    if (config->mask & MASK_PORT_BOOT_STATE)
-    {
-        // Send command
-        char cmd[16];
-        snprintf(cmd, sizeof(cmd), ":SAB0%d#", config->bootState != 0);
-
-        if (!SendCommand(device, cmd))
-        {
-            return PB_ERROR_COMMUNICATION;
-        }
-
-        device->buckBootstrap = config->bootState != 0;
-    }
-
-    if(config->mask & MASK_PORT_OVERCURRENT_RESET)
-    {
-        // Send command
-        char cmd[16];
-        snprintf(cmd, sizeof(cmd), ":SAO0#");
-
-        if (!SendCommand(device, cmd))
-        {
-            return PB_ERROR_COMMUNICATION;
-        }
-    }
-
-    return PB_SUCCESS;
-}
-
-PBAPI PB_ERROR_TYPE PBSetPWMPortConfig(int id, PB_PWM_PORT_CONFIG *config)
-{
-    if (!config)
-    {
-        return PB_ERROR_NULL_POINTER;
-    }
-
-    std::lock_guard<std::mutex> lock(g_globalMutex);
-
-    auto it = g_devices.find(id);
-    if (it == g_devices.end())
-    {
-        return PB_ERROR_INVALID_ID;
-    }
-
-    auto device = it->second;
-
-    // State and power is set with a single call, need to combine
-    int newState = (config->mask & MASK_PORT_ENABLE) ? (config->enabled != 0) : device->pwmState;
-    int newPower = (config->mask & MASK_PORT_POWER) ? config->power : device->pwmPWM;
-
-    if (config->mask & MASK_PORT_ENABLE || config->mask & MASK_PORT_POWER)
-    {
-        // Send command
-        char cmd[16];
-        snprintf(cmd, sizeof(cmd), ":SAS1%d%d#", newState != 0, newPower);
-
-        if (!SendCommand(device, cmd))
-        {
-            return PB_ERROR_COMMUNICATION;
-        }
-
-        device->pwmState = newState != 0;
-        device->pwmPWM = newPower;
-    }
-
-    if(config->mask & MASK_PORT_OVERCURRENT_RESET)
-    {
-        // Send command
-        char cmd[16];
-        snprintf(cmd, sizeof(cmd), ":SAO1#");
-
-        if (!SendCommand(device, cmd))
-        {
-            return PB_ERROR_COMMUNICATION;
-        }
+        PB_DEBUG("PBSetDewPortConfig: Overcurrent reset on port %d", config->index);
     }
 
     return PB_SUCCESS;
@@ -1298,8 +588,10 @@ PBAPI PB_ERROR_TYPE PBSetPWMPortConfig(int id, PB_PWM_PORT_CONFIG *config)
 
 PBAPI PB_ERROR_TYPE PBGetBuckPortConfig(int id, PB_BUCK_PORT_CONFIG *config)
 {
+    PB_DEBUG("PBGetBuckPortConfig: Getting buck port config for device id=%d", id);
     if (!config)
     {
+        PB_ERROR("PBGetBuckPortConfig: config pointer is null");
         return PB_ERROR_NULL_POINTER;
     }
 
@@ -1308,22 +600,84 @@ PBAPI PB_ERROR_TYPE PBGetBuckPortConfig(int id, PB_BUCK_PORT_CONFIG *config)
     auto it = g_devices.find(id);
     if (it == g_devices.end())
     {
+        PB_ERROR("PBGetBuckPortConfig: Device id=%d not found", id);
         return PB_ERROR_INVALID_ID;
     }
 
     auto device = it->second;
 
-    config->enabled = device->buckState != 0;
-    config->bootState = device->buckBootstrap != 0;
-    config->targetVoltage = device->buckVset;
+    config->enabled = device->GetBuckState() != 0;
+    config->bootState = device->GetBuckBootState() != 0;
+    config->targetVoltage = device->GetBuckSetVoltage();
+    PB_DEBUG("PBGetBuckPortConfig: enabled=%d, bootState=%d, targetVoltage=%.2fV",
+             config->enabled, config->bootState, config->targetVoltage);
+
+    return PB_SUCCESS;
+}
+
+PBAPI PB_ERROR_TYPE PBSetBuckPortConfig(int id, PB_BUCK_PORT_CONFIG *config)
+{
+    PB_DEBUG("PBSetBuckPortConfig: Setting buck port config for device id=%d", id);
+    if (!config)
+    {
+        PB_ERROR("PBSetBuckPortConfig: config pointer is null");
+        return PB_ERROR_NULL_POINTER;
+    }
+
+    std::lock_guard<std::mutex> lock(g_globalMutex);
+
+    auto it = g_devices.find(id);
+    if (it == g_devices.end())
+    {
+        PB_ERROR("PBSetBuckPortConfig: Device id=%d not found", id);
+        return PB_ERROR_INVALID_ID;
+    }
+
+    auto device = it->second;
+
+    // State and power is set with a single call, need to combine
+    int newState = (config->mask & MASK_PORT_ENABLE) ? (config->enabled != 0) : device->GetBuckState();
+    int newTarget = ((config->mask & MASK_PORT_VOLTAGE) ? config->targetVoltage : device->GetBuckSetVoltage()) * 1000.0f;
+
+    if (config->mask & MASK_PORT_ENABLE || config->mask & MASK_PORT_VOLTAGE)
+    {
+        if (!device->SetBuckState(newState, newTarget))
+        {
+            PB_ERROR("PBSetBuckPortConfig: Failed to set buck state, enabled=%d, voltage=%d", newState, newTarget);
+            return PB_ERROR_COMMUNICATION;
+        }
+        PB_DEBUG("PBSetBuckPortConfig: state=%d, voltage=%.2fV", newState, newTarget/1000.0f);
+    }
+
+    if (config->mask & MASK_PORT_BOOT_STATE)
+    {
+        if (!device->SetBuckBootState(config->bootState))
+        {
+            PB_ERROR("PBSetBuckPortConfig: Failed to set boot state");
+            return PB_ERROR_COMMUNICATION;
+        }
+        PB_DEBUG("PBSetBuckPortConfig: bootState=%d", config->bootState);
+    }
+
+    if(config->mask & MASK_PORT_OVERCURRENT_RESET)
+    {
+        if (!device->ResetBuckOvercurrent())
+        {
+            PB_ERROR("PBSetBuckPortConfig: Failed to reset overcurrent");
+            return PB_ERROR_COMMUNICATION;
+        }
+        PB_DEBUG("PBSetBuckPortConfig: Overcurrent reset");
+    }
 
     return PB_SUCCESS;
 }
 
 PBAPI PB_ERROR_TYPE PBGetPWMPortConfig(int id, PB_PWM_PORT_CONFIG *config)
 {
+    PB_DEBUG("PBGetPWMPortConfig: Getting PWM port config for device id=%d", id);
     if (!config)
     {
+        PB_ERROR("PBGetPWMPortConfig: config pointer is null");
         return PB_ERROR_NULL_POINTER;
     }
 
@@ -1332,21 +686,25 @@ PBAPI PB_ERROR_TYPE PBGetPWMPortConfig(int id, PB_PWM_PORT_CONFIG *config)
     auto it = g_devices.find(id);
     if (it == g_devices.end())
     {
+        PB_ERROR("PBGetPWMPortConfig: Device id=%d not found", id);
         return PB_ERROR_INVALID_ID;
     }
 
     auto device = it->second;
 
-    config->enabled = device->pwmState != 0;
-    config->power = device->pwmPWM;
+    config->enabled = device->GetPWMState() != 0;
+    config->power = device->GetPWMPower();
+    PB_DEBUG("PBGetPWMPortConfig: enabled=%d, power=%d", config->enabled, config->power);
 
     return PB_SUCCESS;
 }
 
-PBAPI PB_ERROR_TYPE PBGetStatus(int id, PB_DEVICE_STATUS *status)
+PBAPI PB_ERROR_TYPE PBSetPWMPortConfig(int id, PB_PWM_PORT_CONFIG *config)
 {
-    if (!status)
+    PB_DEBUG("PBSetPWMPortConfig: Setting PWM port config for device id=%d", id);
+    if (!config)
     {
+        PB_ERROR("PBSetPWMPortConfig: config pointer is null");
         return PB_ERROR_NULL_POINTER;
     }
 
@@ -1355,350 +713,34 @@ PBAPI PB_ERROR_TYPE PBGetStatus(int id, PB_DEVICE_STATUS *status)
     auto it = g_devices.find(id);
     if (it == g_devices.end())
     {
+        PB_ERROR("PBSetPWMPortConfig: Device id=%d not found", id);
         return PB_ERROR_INVALID_ID;
     }
 
     auto device = it->second;
 
-    status->upTime = device->upTime;
-    status->temperature = device->temperature;
-    status->humidity = device->humidity;
-    status->dewPoint = device->dewPoint;
-    status->extSensor = device->extSensor;
+    // State and power is set with a single call, need to combine
+    int newState = (config->mask & MASK_PORT_ENABLE) ? (config->enabled != 0) : device->GetPWMState();
+    int newPower = (config->mask & MASK_PORT_POWER) ? config->power : device->GetPWMPower();
 
-    return PB_SUCCESS;
-}
-
-PBAPI PB_ERROR_TYPE PBGetSupplyStatus(int id, PB_SUPPLY_STATUS *status)
-{
-    if (!status)
+    if (config->mask & MASK_PORT_ENABLE || config->mask & MASK_PORT_POWER)
     {
-        return PB_ERROR_NULL_POINTER;
-    }
-
-    std::lock_guard<std::mutex> lock(g_globalMutex);
-
-    auto it = g_devices.find(id);
-    if (it == g_devices.end())
-    {
-        return PB_ERROR_INVALID_ID;
-    }
-
-    auto device = it->second;
-
-    status->mainVoltage = device->supply12V;
-    status->usbVoltage = device->supply5V;
-    status->current = device->supply12A;
-    status->ampereHours = device->supply12Ah;
-    status->wattHours = device->supply12Wh;
-
-    return PB_SUCCESS;
-}
-
-PBAPI PB_ERROR_TYPE PBGetPowerPortStatus(int id, PB_POWER_PORT_STATUS *status)
-{
-    if (!status)
-    {
-        return PB_ERROR_NULL_POINTER;
-    }
-
-    std::lock_guard<std::mutex> lock(g_globalMutex);
-
-    auto it = g_devices.find(id);
-    if (it == g_devices.end())
-    {
-        return PB_ERROR_INVALID_ID;
-    }
-
-    auto device = it->second;
-
-    for (int i = 0; i < PB_NUM_POWER_PORTS; ++i)
-    {
-        status->current[i] = device->powerCurrent[i];
-        status->overcurrent[i] = device->powerOvercurrent[i];
-    }
-
-    return PB_SUCCESS;
-}
-
-PBAPI PB_ERROR_TYPE PBGetUSBPortStatus(int id, PB_USB_PORT_STATUS *status)
-{
-    if (!status)
-    {
-        return PB_ERROR_NULL_POINTER;
-    }
-
-    std::lock_guard<std::mutex> lock(g_globalMutex);
-
-    auto it = g_devices.find(id);
-    if (it == g_devices.end())
-    {
-        return PB_ERROR_INVALID_ID;
-    }
-
-    auto device = it->second;
-
-    for (int i = 0; i < PB_NUM_USB_PORTS; ++i)
-    {
-        status->current[i] = device->usbCurrent[i];
-        status->voltage[i] = device->usbVoltage[i];
-        status->overcurrent[i] = device->usbOvercurrent[i];
-    }
-
-    return PB_SUCCESS;
-}
-
-PBAPI PB_ERROR_TYPE PBGetDewPortStatus(int id, PB_DEW_PORT_STATUS *status)
-{
-    if (!status)
-    {
-        return PB_ERROR_NULL_POINTER;
-    }
-
-    std::lock_guard<std::mutex> lock(g_globalMutex);
-
-    auto it = g_devices.find(id);
-    if (it == g_devices.end())
-    {
-        return PB_ERROR_INVALID_ID;
-    }
-
-    auto device = it->second;
-
-    status->pwmResolution = device->dewPwmResolution;
-
-    for (int i = 0; i < PB_NUM_DEW_PORTS; ++i)
-    {
-        status->current[i] = device->dewCurrent[i];
-        status->overcurrent[i] = device->dewOvercurrent[i];
-        status->probe[i] = device->dewProbe[i];
-        status->pwm[i] = device->dewPWM[i];
-        status->state[i] = device->dewState[i];
-    }
-
-    return PB_SUCCESS;
-}
-
-PBAPI PB_ERROR_TYPE PBGetBuckPortStatus(int id, PB_BUCK_PORT_STATUS *status)
-{
-    if (!status)
-    {
-        return PB_ERROR_NULL_POINTER;
-    }
-
-    std::lock_guard<std::mutex> lock(g_globalMutex);
-
-    auto it = g_devices.find(id);
-    if (it == g_devices.end())
-    {
-        return PB_ERROR_INVALID_ID;
-    }
-
-    auto device = it->second;
-
-    status->current = device->buckCurrent;
-    status->voltage = device->buckVoltage;
-    status->overcurrent = device->buckOvercurrent;
-    status->vset = device->buckVset;
-    status->vmin = device->buckVmin;
-    status->vmax = device->buckVmax;
-
-    return PB_SUCCESS;
-}
-
-PBAPI PB_ERROR_TYPE PBGetPWMPortStatus(int id, PB_PWM_PORT_STATUS *status)
-{
-    if (!status)
-    {
-        return PB_ERROR_NULL_POINTER;
-    }
-
-    std::lock_guard<std::mutex> lock(g_globalMutex);
-
-    auto it = g_devices.find(id);
-    if (it == g_devices.end())
-    {
-        return PB_ERROR_INVALID_ID;
-    }
-
-    auto device = it->second;
-
-    status->pwmResolution = device->pwmPwmResolution;
-    status->current = device->pwmCurrent;
-    status->overcurrent = device->pwmOvercurrent;
-    status->pwm = device->pwmPWM;
-
-    return PB_SUCCESS;
-}
-
-PBAPI PB_ERROR_TYPE PBRestart(int id)
-{
-    std::lock_guard<std::mutex> lock(g_globalMutex);
-
-    auto it = g_devices.find(id);
-    if (it == g_devices.end())
-    {
-        return PB_ERROR_INVALID_ID;
-    }
-
-    auto device = it->second;
-    if (!device || !device->port || !device->port->IsOpen())
-    {
-        return PB_ERROR_INVALID_STATE;
-    }
-
-    /* Send factory reset command */
-    if (!SendCommand(device, ":RD#"))
-    {
-        return PB_ERROR_COMMUNICATION;
-    }
-
-    return PB_SUCCESS;
-}
-
-PBAPI PB_ERROR_TYPE PBFactoryReset(int id)
-{
-    std::lock_guard<std::mutex> lock(g_globalMutex);
-
-    auto it = g_devices.find(id);
-    if (it == g_devices.end())
-    {
-        return PB_ERROR_INVALID_ID;
-    }
-
-    auto device = it->second;
-    if (!device || !device->port || !device->port->IsOpen())
-    {
-        return PB_ERROR_INVALID_STATE;
-    }
-
-    /* Send factory reset command */
-    if (!SendCommand(device, ":FR#"))
-    {
-        return PB_ERROR_COMMUNICATION;
-    }
-
-    return PB_SUCCESS;
-}
-
-PBAPI PB_ERROR_TYPE PBGetVersion(int id, PB_VERSION *version)
-{
-    if (!version)
-    {
-        return PB_ERROR_NULL_POINTER;
-    }
-
-    std::lock_guard<std::mutex> lock(g_globalMutex);
-
-    auto it = g_devices.find(id);
-    if (it == g_devices.end())
-    {
-        return PB_ERROR_INVALID_ID;
-    }
-
-    auto device = it->second;
-    version->firmware = device->firmwareVersion;
-
-    // Model
-    strncpy(version->model, device->modelType.c_str(), sizeof(version->model) - 1);
-    version->model[sizeof(version->model) - 1] = '\0';
-
-    // UUID
-    strncpy(version->uuid, device->uuid.c_str(), 37);
-
-    // Serial
-    strncpy(version->serial, device->serial.c_str(), 9);
-
-    return PB_SUCCESS;
-}
-
-PBAPI PB_ERROR_TYPE PBScanWiFi(int id, PB_WIFI_SCAN_RESULT *result)
-{
-    if (!result)
-    {
-        return PB_ERROR_NULL_POINTER;
-    }
-
-    std::lock_guard<std::mutex> lock(g_globalMutex);
-
-    auto it = g_devices.find(id);
-    if (it == g_devices.end())
-    {
-        return PB_ERROR_INVALID_ID;
-    }
-
-    auto device = it->second;
-
-    // Clear previous results and mark scan as pending
-    {
-        std::lock_guard<std::mutex> wifiLock(device->wifiScanMutex);
-        device->wifiScanResult.count = 0;
-        device->wifiScanPending = true;
-    }
-
-    // Ask for wifi survey
-    if (device->port && device->port->IsOpen())
-    {
-        if(!SendCommand(device, ":GWS#"))
+        if (!device->SetPWMState(newState, newPower))
         {
-            PB_ERROR("PBScanWiFi: Failed to start WiFi survey");
-            std::lock_guard<std::mutex> wifiLock(device->wifiScanMutex);
-            device->wifiScanPending = false;
+            PB_ERROR("PBSetPWMPortConfig: Failed to set PWM state");
             return PB_ERROR_COMMUNICATION;
         }
-    }
-    else
-    {
-        std::lock_guard<std::mutex> wifiLock(device->wifiScanMutex);
-        device->wifiScanPending = false;
-        return PB_ERROR_COMMUNICATION;
+        PB_DEBUG("PBSetPWMPortConfig: state=%d, power=%d", newState, newPower);
     }
 
-    // Wait for WiFi scan results (with 10 second timeout)
+    if(config->mask & MASK_PORT_OVERCURRENT_RESET)
     {
-        std::unique_lock<std::mutex> wifiLock(device->wifiScanMutex);
-        const auto timeout = std::chrono::seconds(10);
-        bool completed = device->wifiScanCV.wait_for(wifiLock, timeout, [device]() {
-            return !device->wifiScanPending;
-        });
-
-        if (!completed)
+        if (!device->ResetPWMOvercurrent())
         {
-            PB_ERROR("PBScanWiFi: Timeout waiting for WiFi scan results");
-            device->wifiScanPending = false;
-            return PB_ERROR_TIMEOUT;
+            PB_ERROR("PBSetPWMPortConfig: Failed to reset overcurrent");
+            return PB_ERROR_COMMUNICATION;
         }
-
-        // Copy results to output parameter
-        *result = device->wifiScanResult;
-    }
-
-    return PB_SUCCESS;
-}
-
-PBAPI PB_ERROR_TYPE PBGetWiFiStatus(int id, PB_WIFI_STATUS *status)
-{
-    if (!status)
-    {
-        return PB_ERROR_NULL_POINTER;
-    }
-
-    std::lock_guard<std::mutex> lock(g_globalMutex);
-
-    auto it = g_devices.find(id);
-    if (it == g_devices.end())
-    {
-        return PB_ERROR_INVALID_ID;
-    }
-
-    auto device = it->second;
-
-    /* Return cached WiFi info from listener thread */
-    {
-        std::lock_guard<std::mutex> infoLock(device->wifiInfoMutex);
-        strncpy(status->IP, device->wifiIP, PB_IP_LEN - 1);
-        status->IP[PB_IP_LEN - 1] = '\0';
-        status->rssi = device->wifiRSSI;
+        PB_DEBUG("PBSetPWMPortConfig: Overcurrent reset");
     }
 
     return PB_SUCCESS;
@@ -1706,8 +748,10 @@ PBAPI PB_ERROR_TYPE PBGetWiFiStatus(int id, PB_WIFI_STATUS *status)
 
 PBAPI PB_ERROR_TYPE PBGetWiFiConfig(int id, PB_WIFI_CONFIG *config)
 {
+    PB_DEBUG("PBGetWiFiConfig: Getting WiFi config for device id=%d", id);
     if (!config)
     {
+        PB_ERROR("PBGetWiFiConfig: config pointer is null");
         return PB_ERROR_NULL_POINTER;
     }
 
@@ -1716,29 +760,25 @@ PBAPI PB_ERROR_TYPE PBGetWiFiConfig(int id, PB_WIFI_CONFIG *config)
     auto it = g_devices.find(id);
     if (it == g_devices.end())
     {
+        PB_ERROR("PBGetWiFiConfig: Device id=%d not found", id);
         return PB_ERROR_INVALID_ID;
     }
 
     auto device = it->second;
-
-    /* Return cached WiFi info from listener thread */
+    PB_ERROR_TYPE result = device->GetWiFiConfig(config);
+    if (result != PB_SUCCESS && result != PB_ERROR_NOT_AVAILABLE)
     {
-        std::lock_guard<std::mutex> infoLock(device->wifiInfoMutex);
-        config->channel = device->wifiChannel;
-        config->mode = device->wifiMode ? PB_WIFI_MODE_CLIENT : PB_WIFI_MODE_AP;
-        strncpy(config->ssid, device->wifiSSID, PB_SSID_LEN - 1);
-        config->ssid[PB_SSID_LEN - 1] = '\0';
-        strncpy(config->hostname, device->wifiHostname, PB_HOSTNAME_LEN - 1);
-        config->hostname[PB_HOSTNAME_LEN - 1] = '\0';
+        PB_ERROR("PBGetWiFiConfig: Failed to get WiFi config, error=%d", result);
     }
-
-    return PB_SUCCESS;
+    return result;
 }
 
 PBAPI PB_ERROR_TYPE PBSetWiFiConfig(int id, PB_WIFI_CONFIG *config)
 {
+    PB_DEBUG("PBSetWiFiConfig: Setting WiFi config for device id=%d", id);
     if (!config)
     {
+        PB_ERROR("PBSetWiFiConfig: config pointer is null");
         return PB_ERROR_NULL_POINTER;
     }
 
@@ -1747,95 +787,323 @@ PBAPI PB_ERROR_TYPE PBSetWiFiConfig(int id, PB_WIFI_CONFIG *config)
     auto it = g_devices.find(id);
     if (it == g_devices.end())
     {
+        PB_ERROR("PBSetWiFiConfig: Device id=%d not found", id);
+        return PB_ERROR_INVALID_ID;
+    }
+
+    auto device = it->second;
+    PB_ERROR_TYPE result = device->SetWiFiConfig(config);
+    if (result != PB_SUCCESS && result != PB_ERROR_NOT_AVAILABLE)
+    {
+        PB_ERROR("PBSetWiFiConfig: Failed to set WiFi config, error=%d", result);
+    }
+    else if(result == PB_SUCCESS)
+    {
+        PB_DEBUG("PBSetWiFiConfig: WiFi config updated successfully");
+    }
+    return result;
+}
+
+PBAPI PB_ERROR_TYPE PBGetStatus(int id, PB_DEVICE_STATUS *status)
+{
+    PB_DEBUG("PBGetStatus: Getting device status for id=%d", id);
+    if (!status)
+    {
+        PB_ERROR("PBGetStatus: status pointer is null");
+        return PB_ERROR_NULL_POINTER;
+    }
+
+    std::lock_guard<std::mutex> lock(g_globalMutex);
+
+    auto it = g_devices.find(id);
+    if (it == g_devices.end())
+    {
+        PB_ERROR("PBGetStatus: Device id=%d not found", id);
         return PB_ERROR_INVALID_ID;
     }
 
     auto device = it->second;
 
-    if (!device->port || !device->port->IsOpen())
+    status->upTime = device->GetUpTime();
+    status->coreTemp = device->GetCoreTemp();
+    status->temperature = device->GetTemperature();
+    status->humidity = device->GetHumidity();
+    status->dewPoint = device->GetDewPoint();
+    status->extSensor = device->GetExtSensor();
+    status->hasWifi = device->HasWiFi();
+    PB_DEBUG("PBGetStatus: upTime=%d, temp=%.2f, humid=%.2f, dew=%.2f, extSensor=%d",
+             status->upTime, status->temperature, status->humidity, status->dewPoint, status->extSensor);
+
+    return PB_SUCCESS;
+}
+
+PBAPI PB_ERROR_TYPE PBGetWiFiStatus(int id, PB_WIFI_STATUS *status)
+{
+    PB_DEBUG("PBGetWiFiStatus: Getting WiFi status for device id=%d", id);
+    if (!status)
     {
-        return PB_ERROR_COMMUNICATION;
+        PB_ERROR("PBGetWiFiStatus: status pointer is null");
+        return PB_ERROR_NULL_POINTER;
     }
 
-    // First, query current WiFi info if we need any cached values
-    if (!(config->mask & (MASK_WIFI_SSID | MASK_WIFI_PASSWORD | MASK_WIFI_MODE)))
+    std::lock_guard<std::mutex> lock(g_globalMutex);
+
+    auto it = g_devices.find(id);
+    if (it == g_devices.end())
     {
-        // No fields to update
-        return PB_SUCCESS;
+        PB_ERROR("PBGetWiFiStatus: Device id=%d not found", id);
+        return PB_ERROR_INVALID_ID;
     }
 
-    // Build and send the set WiFi info command
-    // Format: :SWI<ssidlen><ssid><passlen><pass><mode>#
-    // Always send the full command with cached values for fields not being updated
-    
-    char cmdBuffer[512];
-    int cmdLen = 0;
-
-    // Start command
-    cmdLen = snprintf(cmdBuffer, sizeof(cmdBuffer), ":SWI");
-
-    // Add SSID length and SSID
-    const char *ssidToUse = (config->mask & MASK_WIFI_SSID) ? config->ssid : device->wifiSSID;
-    int ssidLen = strlen(ssidToUse);
-    cmdLen += snprintf(cmdBuffer + cmdLen, sizeof(cmdBuffer) - cmdLen, "%d%s", ssidLen, ssidToUse);
-
-    // Add password length and password (AES encrypted and base64 encoded)
-    const char *passToUse = (config->mask & MASK_WIFI_PASSWORD) ? config->pass : "";
-    
-    char encryptedPass[512];
-    encryptedPass[0] = '\0';
-    size_t encryptedLen = 0;
-    
-    if (strlen(passToUse) > 0)
+    auto device = it->second;
+    PB_ERROR_TYPE result = device->GetWiFiStatus(status);
+    if (result != PB_SUCCESS && result != PB_ERROR_NOT_AVAILABLE)
     {
-        // Encrypt password using device's UUID
-        if (EncryptPassword(passToUse, device->uuid.c_str(), encryptedPass))
-        {
-            encryptedLen = strlen(encryptedPass);
-            PB_DEBUG("WiFi Password: plaintext='%s', encrypted='%s', encryptedLen=%zu", passToUse, encryptedPass, encryptedLen);
-        }
+        PB_ERROR("PBGetWiFiStatus: Failed to get WiFi status, error=%d", result);
     }
-    
-    cmdLen += snprintf(cmdBuffer + cmdLen, sizeof(cmdBuffer) - cmdLen, "%zu%s", encryptedLen, encryptedPass);
+    return result;
+}
 
-    // Add mode
-    int modeToUse = (config->mask & MASK_WIFI_MODE) ? config->mode : device->wifiMode;
-    cmdLen += snprintf(cmdBuffer + cmdLen, sizeof(cmdBuffer) - cmdLen, "%d", modeToUse);
-
-    // Terminate command
-    snprintf(cmdBuffer + cmdLen, sizeof(cmdBuffer) - cmdLen, "#");
-
-    if (!SendCommand(device, cmdBuffer))
+PBAPI PB_ERROR_TYPE PBGetSupplyStatus(int id, PB_SUPPLY_STATUS *status)
+{
+    PB_DEBUG("PBGetSupplyStatus: Getting supply status for device id=%d", id);
+    if (!status)
     {
-        PB_ERROR("PBSetWiFiConfig: Failed to send WiFi config command");
-        return PB_ERROR_COMMUNICATION;
+        PB_ERROR("PBGetSupplyStatus: status pointer is null");
+        return PB_ERROR_NULL_POINTER;
     }
 
-    // Wait for device to echo back the updated WiFi info with timeout
+    std::lock_guard<std::mutex> lock(g_globalMutex);
+
+    auto it = g_devices.find(id);
+    if (it == g_devices.end())
     {
-        std::lock_guard<std::mutex> infoLock(device->wifiInfoMutex);
-        device->wifiInfoPending = true;
-    }
-    
-    std::unique_lock<std::mutex> infoLock(device->wifiInfoMutex);
-    if (!device->wifiInfoCV.wait_for(infoLock, std::chrono::seconds(2), 
-                                      [device]() { return !device->wifiInfoPending; }))
-    {
-        PB_DEBUG("PBSetWiFiConfig: Timeout waiting for device WiFi response");
-        device->wifiInfoPending = false;
+        PB_ERROR("PBGetSupplyStatus: Device id=%d not found", id);
+        return PB_ERROR_INVALID_ID;
     }
 
-    // Update device cache with the new values that were sent
-    if (config->mask & MASK_WIFI_SSID)
+    auto device = it->second;
+
+    status->mainVoltage = device->GetSupply12V();
+    status->usbVoltage = device->GetSupply5V();
+    status->current = device->GetSupply12A();
+    status->ampereHours = device->GetSupply12Ah();
+    status->wattHours = device->GetSupply12Wh();
+    PB_DEBUG("PBGetSupplyStatus: 12V=%.2fV, 5V=%.2fV, 12A=%.2fA, Ah=%.2f, Wh=%.2f",
+             status->mainVoltage, status->usbVoltage, status->current, status->ampereHours, status->wattHours);
+
+    return PB_SUCCESS;
+}
+
+PBAPI PB_ERROR_TYPE PBGetPowerPortStatus(int id, PB_POWER_PORT_STATUS *status)
+{
+    PB_DEBUG("PBGetPowerPortStatus: Getting power port status for device id=%d", id);
+    if (!status)
     {
-        strncpy(device->wifiSSID, config->ssid, PB_SSID_LEN - 1);
-        device->wifiSSID[PB_SSID_LEN - 1] = '\0';
+        PB_ERROR("PBGetPowerPortStatus: status pointer is null");
+        return PB_ERROR_NULL_POINTER;
     }
 
-    if (config->mask & MASK_WIFI_MODE)
+    std::lock_guard<std::mutex> lock(g_globalMutex);
+
+    auto it = g_devices.find(id);
+    if (it == g_devices.end())
     {
-        device->wifiMode = config->mode;
+        PB_ERROR("PBGetPowerPortStatus: Device id=%d not found", id);
+        return PB_ERROR_INVALID_ID;
     }
 
+    auto device = it->second;
+    return device->GetPowerPortStatus(status);
+}
+
+PBAPI PB_ERROR_TYPE PBGetUSBPortStatus(int id, PB_USB_PORT_STATUS *status)
+{
+    PB_DEBUG("PBGetUSBPortStatus: Getting USB port status for device id=%d", id);
+    if (!status)
+    {
+        PB_ERROR("PBGetUSBPortStatus: status pointer is null");
+        return PB_ERROR_NULL_POINTER;
+    }
+
+    std::lock_guard<std::mutex> lock(g_globalMutex);
+
+    auto it = g_devices.find(id);
+    if (it == g_devices.end())
+    {
+        PB_ERROR("PBGetUSBPortStatus: Device id=%d not found", id);
+        return PB_ERROR_INVALID_ID;
+    }
+
+    auto device = it->second;
+    return device->GetUSBPortStatus(status);
+}
+
+PBAPI PB_ERROR_TYPE PBGetDewPortStatus(int id, PB_DEW_PORT_STATUS *status)
+{
+    PB_DEBUG("PBGetDewPortStatus: Getting dew port status for device id=%d", id);
+    if (!status)
+    {
+        PB_ERROR("PBGetDewPortStatus: status pointer is null");
+        return PB_ERROR_NULL_POINTER;
+    }
+
+    std::lock_guard<std::mutex> lock(g_globalMutex);
+
+    auto it = g_devices.find(id);
+    if (it == g_devices.end())
+    {
+        PB_ERROR("PBGetDewPortStatus: Device id=%d not found", id);
+        return PB_ERROR_INVALID_ID;
+    }
+
+    auto device = it->second;
+    return device->GetDewPortStatus(status);
+}
+
+PBAPI PB_ERROR_TYPE PBGetBuckPortStatus(int id, PB_BUCK_PORT_STATUS *status)
+{
+    PB_DEBUG("PBGetBuckPortStatus: Getting buck port status for device id=%d", id);
+    if (!status)
+    {
+        PB_ERROR("PBGetBuckPortStatus: status pointer is null");
+        return PB_ERROR_NULL_POINTER;
+    }
+
+    std::lock_guard<std::mutex> lock(g_globalMutex);
+
+    auto it = g_devices.find(id);
+    if (it == g_devices.end())
+    {
+        PB_ERROR("PBGetBuckPortStatus: Device id=%d not found", id);
+        return PB_ERROR_INVALID_ID;
+    }
+
+    auto device = it->second;
+    return device->GetBuckPortStatus(status);
+}
+
+PBAPI PB_ERROR_TYPE PBGetPWMPortStatus(int id, PB_PWM_PORT_STATUS *status)
+{
+    PB_DEBUG("PBGetPWMPortStatus: Getting PWM port status for device id=%d", id);
+    if (!status)
+    {
+        PB_ERROR("PBGetPWMPortStatus: status pointer is null");
+        return PB_ERROR_NULL_POINTER;
+    }
+
+    std::lock_guard<std::mutex> lock(g_globalMutex);
+
+    auto it = g_devices.find(id);
+    if (it == g_devices.end())
+    {
+        PB_ERROR("PBGetPWMPortStatus: Device id=%d not found", id);
+        return PB_ERROR_INVALID_ID;
+    }
+
+    auto device = it->second;
+    return device->GetPWMPortStatus(status);
+}
+
+PBAPI PB_ERROR_TYPE PBGetVersion(int id, PB_VERSION *version)
+{
+    PB_DEBUG("PBGetVersion: Getting version info for device id=%d", id);
+    if (!version)
+    {
+        PB_ERROR("PBGetVersion: version pointer is null");
+        return PB_ERROR_NULL_POINTER;
+    }
+
+    std::lock_guard<std::mutex> lock(g_globalMutex);
+
+    auto it = g_devices.find(id);
+    if (it == g_devices.end())
+    {
+        PB_ERROR("PBGetVersion: Device id=%d not found", id);
+        return PB_ERROR_INVALID_ID;
+    }
+
+    auto device = it->second;
+    version->firmware = device->GetFirmwareVersion();
+
+    // Model
+    strncpy(version->model, device->GetModelType().c_str(), sizeof(version->model) - 1);
+    version->model[sizeof(version->model) - 1] = '\0';
+
+    // UUID
+    strncpy(version->uuid, device->GetUUID().c_str(), 37);
+    version->uuid[37] = '\0';
+
+    // Serial
+    strncpy(version->serial, device->GetSerial().c_str(), 9);
+    version->serial[9] = '\0';
+
+    PB_DEBUG("PBGetVersion: model=%s, serial=%s, firmware=%d", version->model, version->serial, version->firmware);
+
+    return PB_SUCCESS;
+}
+
+PBAPI PB_ERROR_TYPE PBRestart(int id)
+{
+    PB_DEBUG("PBRestart: Restarting device id=%d", id);
+    std::lock_guard<std::mutex> lock(g_globalMutex);
+
+    auto it = g_devices.find(id);
+    if (it == g_devices.end())
+    {
+        PB_ERROR("PBRestart: Device id=%d not found", id);
+        return PB_ERROR_INVALID_ID;
+    }
+
+    auto device = it->second;
+    PB_ERROR_TYPE result = device->Restart();
+    if (result == PB_SUCCESS)
+    {
+        PB_DEBUG("PBRestart: Device restart initiated");
+    }
+    else
+    {
+        PB_ERROR("PBRestart: Failed to restart device, error=%d", result);
+    }
+    return result;
+}
+
+PBAPI PB_ERROR_TYPE PBFactoryReset(int id)
+{
+    PB_DEBUG("PBFactoryReset: Performing factory reset on device id=%d", id);
+    std::lock_guard<std::mutex> lock(g_globalMutex);
+
+    auto it = g_devices.find(id);
+    if (it == g_devices.end())
+    {
+        PB_ERROR("PBFactoryReset: Device id=%d not found", id);
+        return PB_ERROR_INVALID_ID;
+    }
+
+    auto device = it->second;
+    PB_ERROR_TYPE result = device->FactoryReset();
+    if (result == PB_SUCCESS)
+    {
+        PB_DEBUG("PBFactoryReset: Factory reset initiated");
+    }
+    else
+    {
+        PB_ERROR("PBFactoryReset: Failed to factory reset device, error=%d", result);
+    }
+    return result;
+}
+
+PBAPI PB_ERROR_TYPE PBGetSDKVersion(char *version)
+{
+    PB_DEBUG("PBGetSDKVersion: Getting SDK version");
+    if (!version)
+    {
+        PB_ERROR("PBGetSDKVersion: version pointer is null");
+        return PB_ERROR_NULL_POINTER;
+    }
+
+    strncpy(version, SDK_VERSION, PB_VERSION_LEN - 1);
+    version[PB_VERSION_LEN - 1] = '\0';
+    PB_DEBUG("PBGetSDKVersion: SDK version=%s", version);
     return PB_SUCCESS;
 }
