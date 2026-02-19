@@ -44,38 +44,6 @@ namespace PowerBox
     bool SendCommand(std::shared_ptr<Device> device, const char *command, int timeoutMs = 3000);
 
     /**
-     * Read and parse device status message.
-     *
-     * Reads a status message from the serial port and updates the device state with
-     * current values: firmware version, position angles, brightness, heater power, etc.
-     * The device continuously broadcasts status messages, so this always gets fresh data.
-     *
-     * Device broadcasts in format:
-     * PowerBox[model]A[firmware]A[closePos]A[openPos]A[currentPos]A[voltage]A[brightness]A[heater]A[asiair]A
-     *
-     * @param device Device to query status from
-     * @return true if status was successfully read and parsed
-     */
-    bool QueryEnv(std::shared_ptr<Device> device);
-
-    /**
-     * Verify device connection with handshake.
-     *
-     * Attempts to read a device status message to confirm the device is present and
-     * responding. Used during device open to validate the serial connection before
-     * adding the device to the registry.
-     *
-     * @param device Device to verify
-     * @return true if device responds with a valid PowerBox message
-     */
-    bool QueryHandshake(std::shared_ptr<Device> device);
-
-    bool QueryPowerStatus(std::shared_ptr<Device> device);
-    bool QueryUSBStatus(std::shared_ptr<Device> device);
-    bool QueryDewStatus(std::shared_ptr<Device> device);
-    bool QueryAdjStatus(std::shared_ptr<Device> device);
-
-    /**
      * Start listening for movement completion messages.
      * Spawns a background thread that reads serial data until movement finishes.
      * Should be called before triggering a move command.

@@ -23,6 +23,7 @@
  * **************************************************************************** */
 
 #include "PowerBoxSDK.h"
+#include "PowerBoxDevice.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -34,12 +35,24 @@ void PrintMenu()
     printf("1. Get device status\n");
     printf("2. Get device configuration\n");
     printf("3. Set device configuration\n");
-    printf("4. Open device\n");
-    printf("5. Close device\n");
-    printf("6. Restart device\n");
-    printf("7. Factory reset device\n");
-    printf("8. Get supply status\n");    printf("9. Get port status\n");    printf("10. Refresh and display all info\n");
-    printf("11. Exit\n");
+    printf("4. Configure power ports\n");
+    printf("5. Configure USB ports\n");
+    printf("6. Configure dew ports\n");
+    printf("7. Configure buck port\n");
+    printf("8. Configure PWM port\n");
+    printf("9. Open device\n");
+    printf("10. Close device\n");
+    printf("11. Restart device\n");
+    printf("12. Factory reset device\n");
+    printf("13. Get supply status\n");
+    printf("14. Get port status\n");
+    printf("15. Refresh and display all info\n");
+    printf("16. Test get/set config\n");
+    printf("17. WiFi Survey\n");
+    printf("18. WiFi Info\n");
+    printf("19. WiFi Config (Get)\n");
+    printf("20. WiFi Config (Set)\n");
+    printf("21. Exit\n");
     printf("> ");
 }
 
@@ -141,8 +154,14 @@ void DisplayPortStatus(int deviceId)
         {
             const char *state = dewPorts.state[i] ? "ON" : "OFF";
             const char *overcurrent = dewPorts.overcurrent[i] ? "[OVERCURRENT]" : "OK";
-            printf("Dew Port %d: %.3f A, Probe Temp: %.2f °C, PWM: %d%%, State: %s - %s\n", 
-                   i + 1, dewPorts.current[i], dewPorts.probe[i], dewPorts.pwm[i], state, overcurrent);
+            
+            // Get auto mode info from internal device structure
+            std::lock_guard<std::mutex> lock(PowerBox::g_globalMutex);
+            auto it = PowerBox::g_devices.find(deviceId);
+            const char *autoMode = (it != PowerBox::g_devices.end() && it->second->dewAuto[i]) ? "AUTO" : "MANUAL";
+            
+            printf("Dew Port %d: %.3f A, Probe Temp: %.2f °C, PWM: %d%%, State: %s, Mode: %s - %s\n", 
+                   i + 1, dewPorts.current[i], dewPorts.probe[i], dewPorts.pwm[i], state, autoMode, overcurrent);
         }
     }
     else
@@ -212,6 +231,14 @@ void SetConfigInteractive(int deviceId)
     fflush(stdout);
     if (fgets(input, sizeof(input), stdin) && input[0] != '\n')
     {
+        updates.envUpdateRate = atoi(input);
+        mask |= MASK_PB_ENV_UPDATE_RATE;
+    }
+
+    printf("Property Update Rate in seconds (current: %d): ", curCfg.updateRate);
+    fflush(stdout);
+    if (fgets(input, sizeof(input), stdin) && input[0] != '\n')
+    {
         updates.updateRate = atoi(input);
         mask |= MASK_PB_UPDATE_RATE;
     }
@@ -254,6 +281,512 @@ void DisplayAllInfo(int deviceId)
 
     DisplayStatus(deviceId);
     DisplayConfig(deviceId);
+}
+
+void TestGetSetConfig(int deviceId)
+{
+    printf("\n=== Testing Get/Set Configuration ===\n");
+
+    /* Get current configuration */
+    printf("\nGetting current device configuration...\n");
+    PB_DEVICE_CONFIG config;
+    PB_ERROR_TYPE result = PBGetConfig(deviceId, &config);
+    
+    if (result != PB_SUCCESS)
+    {
+        printf("[FAIL] Failed to get configuration (Error: %d)\n", result);
+        return;
+    }
+
+    printf("[OK] Current Configuration:\n");
+    printf("  Temperature Offset: %.2f °C\n", config.temperatureOffset);
+    printf("  Humidity Offset: %.2f %%\n", config.humidityOffset);
+    printf("  Environment Update Rate: %d s\n", config.envUpdateRate);
+    printf("  Property Update Rate: %d s\n", config.updateRate);
+
+    /* Test setting temperature offset */
+    printf("\nTesting set temperature offset...\n");
+    PB_DEVICE_CONFIG updateCfg = {};
+    updateCfg.mask = MASK_PB_TEMPERATURE_OFFSET;
+    updateCfg.temperatureOffset = 0.5f;
+    
+    result = PBSetConfig(deviceId, &updateCfg);
+    if (result == PB_SUCCESS)
+    {
+        printf("[OK] Temperature offset updated\n");
+        
+        /* Verify by getting config again */
+        PB_DEVICE_CONFIG verifyConfig;
+        result = PBGetConfig(deviceId, &verifyConfig);
+        if (result == PB_SUCCESS)
+        {
+            printf("  Verified temperature offset: %.2f °C\n", verifyConfig.temperatureOffset);
+        }
+    }
+    else
+    {
+        printf("[FAIL] Failed to set temperature offset (Error: %d)\n", result);
+    }
+
+    /* Test setting humidity offset */
+    printf("\nTesting set humidity offset...\n");
+    updateCfg = {};
+    updateCfg.mask = MASK_PB_HUMIDITY_OFFSET;
+    updateCfg.humidityOffset = 1.0f;
+    
+    result = PBSetConfig(deviceId, &updateCfg);
+    if (result == PB_SUCCESS)
+    {
+        printf("[OK] Humidity offset updated\n");
+        
+        /* Verify by getting config again */
+        PB_DEVICE_CONFIG verifyConfig;
+        result = PBGetConfig(deviceId, &verifyConfig);
+        if (result == PB_SUCCESS)
+        {
+            printf("  Verified humidity offset: %.2f %%\n", verifyConfig.humidityOffset);
+        }
+    }
+    else
+    {
+        printf("[FAIL] Failed to set humidity offset (Error: %d)\n", result);
+    }
+
+    /* Test setting update rates */
+    printf("\nTesting set update rates...\n");
+    updateCfg = {};
+    updateCfg.mask = MASK_PB_ENV_UPDATE_RATE | MASK_PB_UPDATE_RATE;
+    updateCfg.envUpdateRate = 5;
+    updateCfg.updateRate = 2;
+    
+    result = PBSetConfig(deviceId, &updateCfg);
+    if (result == PB_SUCCESS)
+    {
+        printf("[OK] Update rates changed\n");
+        
+        /* Verify by getting config again */
+        PB_DEVICE_CONFIG verifyConfig;
+        result = PBGetConfig(deviceId, &verifyConfig);
+        if (result == PB_SUCCESS)
+        {
+            printf("  Verified environment update rate: %d s\n", verifyConfig.envUpdateRate);
+            printf("  Verified property update rate: %d s\n", verifyConfig.updateRate);
+        }
+    }
+    else
+    {
+        printf("[FAIL] Failed to set update rates (Error: %d)\n", result);
+    }
+
+    /* Restore original config */
+    printf("\nRestoring original configuration...\n");
+    updateCfg = config;
+    updateCfg.mask = MASK_PB_ALL;
+    
+    result = PBSetConfig(deviceId, &updateCfg);
+    if (result == PB_SUCCESS)
+    {
+        printf("[OK] Configuration restored\n");
+    }
+    else
+    {
+        printf("[FAIL] Failed to restore configuration (Error: %d)\n", result);
+    }
+
+    printf("\n=== Config Test Complete ===\n");
+}
+
+void ConfigurePowerPorts(int deviceId)
+{
+    printf("\n=== Power Ports Configuration ===\n");
+    printf("You have %d power ports (1-%d)\n\n", PB_NUM_POWER_PORTS, PB_NUM_POWER_PORTS);
+
+    for (int port = 0; port < PB_NUM_POWER_PORTS; port++)
+    {
+        PB_POWER_PORT_CONFIG config = {};
+        config.index = port;
+        
+        PB_ERROR_TYPE result = PBGetPowerPortConfig(deviceId, &config);
+        if (result != PB_SUCCESS)
+        {
+            printf("[FAIL] Failed to get config for power port %d (Error: %d)\n", port + 1, result);
+            continue;
+        }
+
+        printf("--- Power Port %d ---\n", port + 1);
+        printf("Current Enabled: %s\n", config.enabled ? "YES" : "NO");
+        printf("Current Boot State: %s\n\n", config.bootState ? "ON" : "OFF");
+
+        char input[128];
+        unsigned int mask = 0;
+        PB_POWER_PORT_CONFIG updates = {};
+        updates.index = port;
+
+        printf("Enable port? (y/n, leave empty to skip): ");
+        fflush(stdout);
+        if (fgets(input, sizeof(input), stdin) && input[0] != '\n')
+        {
+            updates.enabled = (input[0] == 'y' || input[0] == 'Y') ? 1 : 0;
+            mask |= MASK_PORT_ENABLE;
+        }
+
+        printf("Boot state (1=ON, 0=OFF, leave empty to skip): ");
+        fflush(stdout);
+        if (fgets(input, sizeof(input), stdin) && input[0] != '\n')
+        {
+            updates.bootState = atoi(input);
+            mask |= MASK_PORT_BOOT_STATE;
+        }
+
+        printf("Reset overcurrent? (y/n, leave empty to skip): ");
+        fflush(stdout);
+        if (fgets(input, sizeof(input), stdin) && input[0] != '\n')
+        {
+            updates.overcurrentReset = (input[0] == 'y' || input[0] == 'Y') ? 1 : 0;
+            mask |= MASK_PORT_OVERCURRENT_RESET;
+        }
+
+        if (mask > 0)
+        {
+            updates.mask = mask;
+            result = PBSetPowerPortConfig(deviceId, &updates);
+            if (result == PB_SUCCESS)
+            {
+                printf("[OK] Power port %d updated\n\n", port + 1);
+            }
+            else
+            {
+                printf("[FAIL] Failed to update power port %d (Error: %d)\n\n", port + 1, result);
+            }
+        }
+        else
+        {
+            printf("No changes for power port %d\n\n", port + 1);
+        }
+    }
+}
+
+void ConfigureUSBPorts(int deviceId)
+{
+    printf("\n=== USB Ports Configuration ===\n");
+    printf("You have %d USB ports (1-%d)\n\n", PB_NUM_USB_PORTS, PB_NUM_USB_PORTS);
+
+    for (int port = 0; port < PB_NUM_USB_PORTS; port++)
+    {
+        PB_USB_PORT_CONFIG config = {};
+        config.index = port;
+        
+        PB_ERROR_TYPE result = PBGetUSBPortConfig(deviceId, &config);
+        if (result != PB_SUCCESS)
+        {
+            printf("[FAIL] Failed to get config for USB port %d (Error: %d)\n", port + 1, result);
+            continue;
+        }
+
+        printf("--- USB Port %d ---\n", port + 1);
+        printf("Current Enabled: %s\n", config.enabled ? "YES" : "NO");
+        printf("Current Boot State: %s\n\n", config.bootState ? "ON" : "OFF");
+
+        char input[128];
+        unsigned int mask = 0;
+        PB_USB_PORT_CONFIG updates = {};
+        updates.index = port;
+
+        printf("Enable port? (y/n, leave empty to skip): ");
+        fflush(stdout);
+        if (fgets(input, sizeof(input), stdin) && input[0] != '\n')
+        {
+            updates.enabled = (input[0] == 'y' || input[0] == 'Y') ? 1 : 0;
+            mask |= MASK_PORT_ENABLE;
+        }
+
+        printf("Boot state (1=ON, 0=OFF, leave empty to skip): ");
+        fflush(stdout);
+        if (fgets(input, sizeof(input), stdin) && input[0] != '\n')
+        {
+            updates.bootState = atoi(input);
+            mask |= MASK_PORT_BOOT_STATE;
+        }
+
+        printf("Reset overcurrent? (y/n, leave empty to skip): ");
+        fflush(stdout);
+        if (fgets(input, sizeof(input), stdin) && input[0] != '\n')
+        {
+            updates.overcurrentReset = (input[0] == 'y' || input[0] == 'Y') ? 1 : 0;
+            mask |= MASK_PORT_OVERCURRENT_RESET;
+        }
+
+        if (mask > 0)
+        {
+            updates.mask = mask;
+            result = PBSetUSBPortConfig(deviceId, &updates);
+            if (result == PB_SUCCESS)
+            {
+                printf("[OK] USB port %d updated\n\n", port + 1);
+            }
+            else
+            {
+                printf("[FAIL] Failed to update USB port %d (Error: %d)\n\n", port + 1, result);
+            }
+        }
+        else
+        {
+            printf("No changes for USB port %d\n\n", port + 1);
+        }
+    }
+}
+
+void ConfigureDewPorts(int deviceId)
+{
+    printf("\n=== Dew Ports Configuration ===\n");
+    printf("You have %d dew ports (1-%d)\n\n", PB_NUM_DEW_PORTS, PB_NUM_DEW_PORTS);
+
+    /* Get PWM resolution from status */
+    PB_DEW_PORT_STATUS dewStatus;
+    PB_ERROR_TYPE statusResult = PBGetDewPortStatus(deviceId, &dewStatus);
+    int maxPWMValue = 255; /* Default, will be updated if status is available */
+    
+    if (statusResult == PB_SUCCESS && dewStatus.pwmResolution > 0)
+    {
+        maxPWMValue = (1 << dewStatus.pwmResolution) - 1; /* 2^resolution - 1 */
+        printf("PWM Resolution: %d bits (max value: %d)\n\n", dewStatus.pwmResolution, maxPWMValue);
+    }
+    else
+    {
+        printf("Warning: Could not determine PWM resolution, using default max value: %d\n\n", maxPWMValue);
+    }
+
+    for (int port = 0; port < PB_NUM_DEW_PORTS; port++)
+    {
+        PB_DEW_PORT_CONFIG config = {};
+        config.index = port;
+        
+        PB_ERROR_TYPE result = PBGetDewPortConfig(deviceId, &config);
+        if (result != PB_SUCCESS)
+        {
+            printf("[FAIL] Failed to get config for dew port %d (Error: %d)\n", port + 1, result);
+            continue;
+        }
+
+        printf("--- Dew Port %d ---\n", port + 1);
+        printf("Current Enabled: %s\n", config.enabled ? "YES" : "NO");
+        printf("Current Auto Mode: %s\n", config.autoMode ? "YES" : "NO");
+        printf("Current Auto Threshold: %.2f °C\n", config.autoThreshold);
+        printf("Current PWM Value: %d (0-%d)\n\n", config.power, maxPWMValue);
+
+        char input[128];
+        unsigned int mask = 0;
+        PB_DEW_PORT_CONFIG updates = {};
+        updates.index = port;
+
+        printf("Enable port? (y/n, leave empty to skip): ");
+        fflush(stdout);
+        if (fgets(input, sizeof(input), stdin) && input[0] != '\n')
+        {
+            updates.enabled = (input[0] == 'y' || input[0] == 'Y') ? 1 : 0;
+            mask |= MASK_PORT_ENABLE;
+        }
+
+        printf("Auto mode? (y/n, leave empty to skip): ");
+        fflush(stdout);
+        if (fgets(input, sizeof(input), stdin) && input[0] != '\n')
+        {
+            updates.autoMode = (input[0] == 'y' || input[0] == 'Y') ? 1 : 0;
+            mask |= MASK_PORT_AUTO_DEW_MODE;
+        }
+
+        printf("Auto threshold in °C (leave empty to skip): ");
+        fflush(stdout);
+        if (fgets(input, sizeof(input), stdin) && input[0] != '\n')
+        {
+            updates.autoThreshold = (float)atof(input);
+            mask |= MASK_PORT_AUTO_DEW_THRESHOLD;
+        }
+
+        printf("PWM value 0-%d (leave empty to skip): ", maxPWMValue);
+        fflush(stdout);
+        if (fgets(input, sizeof(input), stdin) && input[0] != '\n')
+        {
+            updates.power = atoi(input);
+            mask |= MASK_PORT_POWER;
+        }
+
+        printf("Reset overcurrent? (y/n, leave empty to skip): ");
+        fflush(stdout);
+        if (fgets(input, sizeof(input), stdin) && input[0] != '\n')
+        {
+            updates.overcurrentReset = (input[0] == 'y' || input[0] == 'Y') ? 1 : 0;
+            mask |= MASK_PORT_OVERCURRENT_RESET;
+        }
+
+        if (mask > 0)
+        {
+            updates.mask = mask;
+            result = PBSetDewPortConfig(deviceId, &updates);
+            if (result == PB_SUCCESS)
+            {
+                printf("[OK] Dew port %d updated\n\n", port + 1);
+            }
+            else
+            {
+                printf("[FAIL] Failed to update dew port %d (Error: %d)\n\n", port + 1, result);
+            }
+        }
+        else
+        {
+            printf("No changes for dew port %d\n\n", port + 1);
+        }
+    }
+}
+
+void ConfigureBuckPort(int deviceId)
+{
+    printf("\n=== Buck Port Configuration ===\n");
+
+    PB_BUCK_PORT_CONFIG config = {};
+    PB_ERROR_TYPE result = PBGetBuckPortConfig(deviceId, &config);
+    
+    if (result != PB_SUCCESS)
+    {
+        printf("[FAIL] Failed to get buck port configuration (Error: %d)\n", result);
+        return;
+    }
+
+    printf("Current Enabled: %s\n", config.enabled ? "YES" : "NO");
+    printf("Current Boot State: %s\n", config.bootState ? "ON" : "OFF");
+    printf("Target Voltage: %.2f V\n\n", config.targetVoltage);
+
+    char input[128];
+    unsigned int mask = 0;
+    PB_BUCK_PORT_CONFIG updates = {};
+
+    printf("Enable port? (y/n, leave empty to skip): ");
+    fflush(stdout);
+    if (fgets(input, sizeof(input), stdin) && input[0] != '\n')
+    {
+        updates.enabled = (input[0] == 'y' || input[0] == 'Y') ? 1 : 0;
+        mask |= MASK_PORT_ENABLE;
+    }
+
+    printf("Boot state (1=ON, 0=OFF, leave empty to skip): ");
+    fflush(stdout);
+    if (fgets(input, sizeof(input), stdin) && input[0] != '\n')
+    {
+        updates.bootState = atoi(input);
+        mask |= MASK_PORT_BOOT_STATE;
+    }
+
+    printf("Output voltage in V (leave empty to skip): ");
+    fflush(stdout);
+    if (fgets(input, sizeof(input), stdin) && input[0] != '\n')
+    {
+        updates.targetVoltage = (float)atof(input);
+        mask |= MASK_PORT_VOLTAGE;
+    }
+
+    printf("Reset overcurrent? (y/n, leave empty to skip): ");
+    fflush(stdout);
+    if (fgets(input, sizeof(input), stdin) && input[0] != '\n')
+    {
+        updates.overcurrentReset = (input[0] == 'y' || input[0] == 'Y') ? 1 : 0;
+        mask |= MASK_PORT_OVERCURRENT_RESET;
+    }
+
+    if (mask > 0)
+    {
+        updates.mask = mask;
+        result = PBSetBuckPortConfig(deviceId, &updates);
+        if (result == PB_SUCCESS)
+        {
+            printf("[OK] Buck port configuration updated\n");
+        }
+        else
+        {
+            printf("[FAIL] Failed to update buck port (Error: %d)\n", result);
+        }
+    }
+    else
+    {
+        printf("No changes for buck port\n");
+    }
+}
+
+void ConfigurePWMPort(int deviceId)
+{
+    printf("\n=== PWM Port Configuration ===\n");
+
+    /* Get PWM resolution from status */
+    PB_PWM_PORT_STATUS pwmStatus;
+    PB_ERROR_TYPE statusResult = PBGetPWMPortStatus(deviceId, &pwmStatus);
+    int maxPWMValue = 255; /* Default, will be updated if status is available */
+    
+    if (statusResult == PB_SUCCESS && pwmStatus.pwmResolution > 0)
+    {
+        maxPWMValue = (1 << pwmStatus.pwmResolution) - 1; /* 2^resolution - 1 */
+        printf("PWM Resolution: %d bits (max value: %d)\n\n", pwmStatus.pwmResolution, maxPWMValue);
+    }
+    else
+    {
+        printf("Warning: Could not determine PWM resolution, using default max value: %d\n\n", maxPWMValue);
+    }
+
+    PB_PWM_PORT_CONFIG config = {};
+    PB_ERROR_TYPE result = PBGetPWMPortConfig(deviceId, &config);
+    
+    if (result != PB_SUCCESS)
+    {
+        printf("[FAIL] Failed to get PWM port configuration (Error: %d)\n", result);
+        return;
+    }
+
+    printf("Current Enabled: %s\n", config.enabled ? "YES" : "NO");
+    printf("Current PWM Value: %d (0-%d)\n\n", config.power, maxPWMValue);
+
+    char input[128];
+    unsigned int mask = 0;
+    PB_PWM_PORT_CONFIG updates = {};
+
+    printf("Enable port? (y/n, leave empty to skip): ");
+    fflush(stdout);
+    if (fgets(input, sizeof(input), stdin) && input[0] != '\n')
+    {
+        updates.enabled = (input[0] == 'y' || input[0] == 'Y') ? 1 : 0;
+        mask |= MASK_PORT_ENABLE;
+    }
+
+    printf("PWM value 0-%d (leave empty to skip): ", maxPWMValue);
+    fflush(stdout);
+    if (fgets(input, sizeof(input), stdin) && input[0] != '\n')
+    {
+        updates.power = atoi(input);
+        mask |= MASK_PORT_POWER;
+    }
+
+    printf("Reset overcurrent? (y/n, leave empty to skip): ");
+    fflush(stdout);
+    if (fgets(input, sizeof(input), stdin) && input[0] != '\n')
+    {
+        updates.overcurrentReset = (input[0] == 'y' || input[0] == 'Y') ? 1 : 0;
+        mask |= MASK_PORT_OVERCURRENT_RESET;
+    }
+
+    if (mask > 0)
+    {
+        updates.mask = mask;
+        result = PBSetPWMPortConfig(deviceId, &updates);
+        if (result == PB_SUCCESS)
+        {
+            printf("[OK] PWM port configuration updated\n");
+        }
+        else
+        {
+            printf("[FAIL] Failed to update PWM port (Error: %d)\n", result);
+        }
+    }
+    else
+    {
+        printf("No changes for PWM port\n");
+    }
 }
 
 int main(int argc, char *argv[])
@@ -314,9 +847,9 @@ int main(int argc, char *argv[])
 
     printf("Using device: %d\n\n", deviceId);
 
-    /* Start with device closed; user may open via menu option 4 */
+    /* Start with device closed; user may open via menu option 9 */
     bool deviceOpened = false;
-    printf("Device is currently closed. Use menu option 4 to open it.\n\n");
+    printf("Device is currently closed. Use menu option 9 to open it.\n\n");
 
     /* Interactive menu */
     char input[256];
@@ -339,7 +872,7 @@ int main(int argc, char *argv[])
         case 1:
             if (!deviceOpened)
             {
-                printf("Device not opened. Use option 4 to open it first.\n");
+                printf("Device not opened. Use option 9 to open it first.\n");
             }
             else
             {
@@ -350,7 +883,7 @@ int main(int argc, char *argv[])
         case 2:
             if (!deviceOpened)
             {
-                printf("Device not opened. Use option 4 to open it first.\n");
+                printf("Device not opened. Use option 9 to open it first.\n");
             }
             else
             {
@@ -361,7 +894,7 @@ int main(int argc, char *argv[])
         case 3:
             if (!deviceOpened)
             {
-                printf("Device not opened. Use option 4 to open it first.\n");
+                printf("Device not opened. Use option 9 to open it first.\n");
             }
             else
             {
@@ -370,6 +903,61 @@ int main(int argc, char *argv[])
             break;
 
         case 4:
+            if (!deviceOpened)
+            {
+                printf("Device not opened. Use option 9 to open it first.\n");
+            }
+            else
+            {
+                ConfigurePowerPorts(deviceId);
+            }
+            break;
+
+        case 5:
+            if (!deviceOpened)
+            {
+                printf("Device not opened. Use option 9 to open it first.\n");
+            }
+            else
+            {
+                ConfigureUSBPorts(deviceId);
+            }
+            break;
+
+        case 6:
+            if (!deviceOpened)
+            {
+                printf("Device not opened. Use option 9 to open it first.\n");
+            }
+            else
+            {
+                ConfigureDewPorts(deviceId);
+            }
+            break;
+
+        case 7:
+            if (!deviceOpened)
+            {
+                printf("Device not opened. Use option 9 to open it first.\n");
+            }
+            else
+            {
+                ConfigureBuckPort(deviceId);
+            }
+            break;
+
+        case 8:
+            if (!deviceOpened)
+            {
+                printf("Device not opened. Use option 9 to open it first.\n");
+            }
+            else
+            {
+                ConfigurePWMPort(deviceId);
+            }
+            break;
+
+        case 9:
             if (deviceOpened)
             {
                 printf("Device already open.\n");
@@ -390,7 +978,7 @@ int main(int argc, char *argv[])
             }
             break;
 
-        case 5:
+        case 10:
             if (!deviceOpened)
             {
                 printf("Device already closed.\n");
@@ -411,10 +999,10 @@ int main(int argc, char *argv[])
             }
             break;
 
-        case 6:
+        case 11:
             if (!deviceOpened)
             {
-                printf("Device not opened. Use option 4 to open it first.\n");
+                printf("Device not opened. Use option 9 to open it first.\n");
             }
             else
             {
@@ -431,10 +1019,10 @@ int main(int argc, char *argv[])
             }
             break;
 
-        case 7:
+        case 12:
             if (!deviceOpened)
             {
-                printf("Device not opened. Use option 4 to open it first.\n");
+                printf("Device not opened. Use option 9 to open it first.\n");
             }
             else
             {
@@ -461,10 +1049,10 @@ int main(int argc, char *argv[])
             }
             break;
 
-        case 8:
+        case 13:
             if (!deviceOpened)
             {
-                printf("Device not opened. Use option 4 to open it first.\n");
+                printf("Device not opened. Use option 9 to open it first.\n");
             }
             else
             {
@@ -472,10 +1060,10 @@ int main(int argc, char *argv[])
             }
             break;
 
-        case 9:
+        case 14:
             if (!deviceOpened)
             {
-                printf("Device not opened. Use option 4 to open it first.\n");
+                printf("Device not opened. Use option 9 to open it first.\n");
             }
             else
             {
@@ -483,10 +1071,10 @@ int main(int argc, char *argv[])
             }
             break;
 
-        case 10:
+        case 15:
             if (!deviceOpened)
             {
-                printf("Device not opened. Use option 4 to open it first.\n");
+                printf("Device not opened. Use option 9 to open it first.\n");
             }
             else
             {
@@ -494,7 +1082,183 @@ int main(int argc, char *argv[])
             }
             break;
 
-        case 11:
+        case 16:
+            if (!deviceOpened)
+            {
+                printf("Device not opened. Use option 9 to open it first.\n");
+            }
+            else
+            {
+                TestGetSetConfig(deviceId);
+            }
+            break;
+
+        case 17:
+            if (!deviceOpened)
+            {
+                printf("Device not opened. Use option 9 to open it first.\n");
+            }
+            else
+            {
+                printf("Scanning WiFi networks...\n");
+                PB_WIFI_SCAN_RESULT result;
+                PB_ERROR_TYPE error = PBScanWiFi(deviceId, &result);
+                if (error == PB_SUCCESS)
+                {
+                    printf("\n--- WiFi Networks Found: %d ---\n", result.count);
+                    for (int i = 0; i < result.count; i++)
+                    {
+                        printf("  %d. SSID: %-32s RSSI: %d dBm\n", i + 1, 
+                               result.networks[i].ssid, result.networks[i].rssi);
+                    }
+                }
+                else
+                {
+                    printf("[FAIL] Failed to scan WiFi networks (Error: %d)\n", error);
+                }
+            }
+            break;
+
+        case 18:
+            if (!deviceOpened)
+            {
+                printf("Device not opened. Use option 9 to open it first.\n");
+            }
+            else
+            {
+                printf("Getting WiFi info...\n");
+                PB_WIFI_STATUS wifiStatus;
+                PB_ERROR_TYPE error = PBGetWiFiStatus(deviceId, &wifiStatus);
+                if (error == PB_SUCCESS)
+                {
+                    printf("\n--- WiFi Status ---\n");
+                    printf("IP Address: %s\n", wifiStatus.IP);
+                    printf("Signal Strength: %d dBm\n", wifiStatus.rssi);
+                }
+                else
+                {
+                    printf("[FAIL] Failed to get WiFi status (Error: %d)\n", error);
+                }
+            }
+            break;
+
+        case 19:
+            if (!deviceOpened)
+            {
+                printf("Device not opened. Use option 9 to open it first.\n");
+            }
+            else
+            {
+                printf("Getting WiFi config...\n");
+                PB_WIFI_CONFIG wifiConfig;
+                PB_ERROR_TYPE error = PBGetWiFiConfig(deviceId, &wifiConfig);
+                if (error == PB_SUCCESS)
+                {
+                    const char *modeStr = (wifiConfig.mode == PB_WIFI_MODE_AP) ? "AP" :
+                                         (wifiConfig.mode == PB_WIFI_MODE_CLIENT) ? "Client" : "Off";
+                    printf("\n--- WiFi Configuration ---\n");
+                    printf("Mode: %s\n", modeStr);
+                    printf("Channel: %d\n", wifiConfig.channel);
+                    printf("SSID: %s\n", wifiConfig.ssid);
+                    printf("Hostname: %s\n", wifiConfig.hostname);
+                }
+                else
+                {
+                    printf("[FAIL] Failed to get WiFi config (Error: %d)\n", error);
+                }
+            }
+            break;
+
+        case 20:
+            if (!deviceOpened)
+            {
+                printf("Device not opened. Use option 9 to open it first.\n");
+            }
+            else
+            {
+                printf("Setting WiFi configuration...\n");
+                
+                PB_WIFI_CONFIG wifiConfig;
+                memset(&wifiConfig, 0, sizeof(wifiConfig));
+                
+                printf("Enter SSID (leave empty to skip): ");
+                char ssidInput[PB_SSID_LEN];
+                if (fgets(ssidInput, sizeof(ssidInput), stdin) != NULL)
+                {
+                    // Remove newline
+                    size_t len = strlen(ssidInput);
+                    if (len > 0 && ssidInput[len-1] == '\n')
+                        ssidInput[len-1] = '\0';
+                    
+                    if (strlen(ssidInput) > 0)
+                    {
+                        strncpy(wifiConfig.ssid, ssidInput, PB_SSID_LEN - 1);
+                        wifiConfig.ssid[PB_SSID_LEN - 1] = '\0';
+                        wifiConfig.mask |= MASK_WIFI_SSID;
+                    }
+                }
+                
+                printf("Enter password (leave empty to skip): ");
+                char passInput[PB_PASSWORD_LEN];
+                if (fgets(passInput, sizeof(passInput), stdin) != NULL)
+                {
+                    // Remove newline
+                    size_t len = strlen(passInput);
+                    if (len > 0 && passInput[len-1] == '\n')
+                        passInput[len-1] = '\0';
+                    
+                    if (strlen(passInput) > 0)
+                    {
+                        strncpy(wifiConfig.pass, passInput, PB_PASSWORD_LEN - 1);
+                        wifiConfig.pass[PB_PASSWORD_LEN - 1] = '\0';
+                        wifiConfig.mask |= MASK_WIFI_PASSWORD;
+                    }
+                }
+                
+                printf("Enter WiFi mode (0=AP, 1=Client, leave empty to skip): ");
+                char modeInput[16];
+                if (fgets(modeInput, sizeof(modeInput), stdin) != NULL)
+                {
+                    // Remove newline
+                    size_t len = strlen(modeInput);
+                    if (len > 0 && modeInput[len-1] == '\n')
+                        modeInput[len-1] = '\0';
+                    
+                    if (strlen(modeInput) > 0)
+                    {
+                        int mode = atoi(modeInput);
+                        if (mode == 0 || mode == 1)
+                        {
+                            wifiConfig.mode = (PB_WIFI_MODE)mode;
+                            wifiConfig.mask |= MASK_WIFI_MODE;
+                        }
+                        else
+                        {
+                            printf("[WARN] Invalid mode, skipping.\n");
+                        }
+                    }
+                }
+                
+                if (wifiConfig.mask == 0)
+                {
+                    printf("[WARN] No configuration to set.\n");
+                }
+                else
+                {
+                    PB_ERROR_TYPE error = PBSetWiFiConfig(deviceId, &wifiConfig);
+                    if (error == PB_SUCCESS)
+                    {
+                        printf("[OK] WiFi configuration set successfully.\n");
+                    }
+                    else
+                    {
+                        printf("[FAIL] Failed to set WiFi config (Error: %d)\n", error);
+                    }
+                }
+            }
+            break;
+
+        case 21:
             running = false;
             break;
 

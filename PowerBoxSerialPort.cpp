@@ -119,26 +119,28 @@ namespace PowerBox
         timeouts.WriteTotalTimeoutConstant = 5000;
         SetCommTimeouts(h, &timeouts);
 
-        /* Save handle in fd variable (map HANDLE to an integer) by storing pointer value casted */
-        fd = (int)(intptr_t)h;
+        /* Save handle in fd variable (support 64-bit handles on Win64) */
+        fd = (intptr_t)h;
 
         PB_DEBUG("SerialPort::Open: Opened %s (handle=%p)", device.c_str(), h);
 #else
         /* Open without O_NONBLOCK to allow blocking I/O */
-        fd = open(portName, O_RDWR | O_NOCTTY);
-        PB_DEBUG("SerialPort::Open: open() returned fd=%d", fd);
+        int open_fd = open(portName, O_RDWR | O_NOCTTY);
+        PB_DEBUG("SerialPort::Open: open() returned fd=%d", open_fd);
 
-        if (fd < 0)
+        if (open_fd < 0)
         {
             PB_ERROR("SerialPort::Open: Failed to open port %s (errno=%d)", portName, errno);
             return false;
         }
 
+        fd = (intptr_t)open_fd;
+
         struct termios tty;
-        if (tcgetattr(fd, &tty) != 0)
+        if (tcgetattr(open_fd, &tty) != 0)
         {
             PB_ERROR("SerialPort::Open: tcgetattr failed (errno=%d)", errno);
-            close(fd);
+            close(open_fd);
             fd = -1;
             return false;
         }
@@ -212,32 +214,32 @@ namespace PowerBox
          *   NOFLSH   - Don't flush I/O buffers on signal
          */
 
-        tcflush(fd, TCIOFLUSH);
+        tcflush((int)fd, TCIOFLUSH);
 
-        if (tcsetattr(fd, TCSANOW, &tty) != 0)
+        if (tcsetattr((int)fd, TCSANOW, &tty) != 0)
         {
             PB_ERROR("SerialPort::Open: tcsetattr failed (errno=%d)", errno);
-            close(fd);
+            close((int)fd);
             fd = -1;
             return false;
         }
         PB_DEBUG("SerialPort::Open: tcsetattr succeeded");
 
-        tcflush(fd, TCIOFLUSH);
-        PB_DEBUG("SerialPort::Open: Successfully opened %s (fd=%d)", portName, fd);
+        tcflush((int)fd, TCIOFLUSH);
+        PB_DEBUG("SerialPort::Open: Successfully opened %s (fd=%d)", portName, (int)fd);
 #endif
         return true;
     }
 
     void SerialPort::Close()
     {
-        if (fd >= 0)
+        if (fd != -1)
         {
 #ifdef _WIN32
-            HANDLE h = (HANDLE)(intptr_t)fd;
+            HANDLE h = (HANDLE)fd;
             CloseHandle(h);
 #else
-            close(fd);
+            close((int)fd);
 #endif
             fd = -1;
         }
@@ -252,13 +254,13 @@ namespace PowerBox
 
     bool SerialPort::Write(const unsigned char *data, int len)
     {
-        if (fd < 0)
+        if (fd == -1)
         {
             return false;
         }
 
 #ifdef _WIN32
-        HANDLE h = (HANDLE)(intptr_t)fd;
+        HANDLE h = (HANDLE)fd;
         DWORD written = 0;
         if (!WriteFile(h, data, (DWORD)len, &written, NULL))
         {
@@ -266,8 +268,8 @@ namespace PowerBox
             return false;
         }
 #else
-        int written = write(fd, data, len);
-        PB_DEBUG("Write: fd=%d, wrote %d/%d bytes (%s)", fd, written, len, data);
+        int written = write((int)fd, data, len);
+        PB_DEBUG("Write: fd=%d, wrote %d/%d bytes (%s)", (int)fd, written, len, data);
 #endif
 
         /* Wait for all data to be sent */
@@ -277,11 +279,11 @@ namespace PowerBox
 
     int SerialPort::Read(unsigned char *buf, int maxlen, char stop_char, int timeoutMs)
     {
-        if (fd < 0 || maxlen <= 1)
+        if (fd == -1 || maxlen <= 1)
             return 0;
 
 #ifdef _WIN32
-        HANDLE h = (HANDLE)(intptr_t)fd;
+        HANDLE h = (HANDLE)fd;
 #endif
         auto start = std::chrono::high_resolution_clock::now();
 
@@ -343,19 +345,19 @@ namespace PowerBox
 #else
             fd_set readfds;
             FD_ZERO(&readfds);
-            FD_SET(fd, &readfds);
+            FD_SET((int)fd, &readfds);
 
             struct timeval tv;
             tv.tv_sec = remainingMs / 1000;
             tv.tv_usec = (remainingMs % 1000) * 1000;
 
-            int selectResult = select(fd + 1, &readfds, NULL, NULL, &tv);
+            int selectResult = select((int)fd + 1, &readfds, NULL, NULL, &tv);
             if (selectResult <= 0)
                 break; /* timeout or error */
 
             /* Find how many bytes are available to read */
             int avail = 0;
-            if (ioctl(fd, FIONREAD, &avail) < 0)
+            if (ioctl((int)fd, FIONREAD, &avail) < 0)
             {
                 avail = 0;
             }
@@ -363,7 +365,7 @@ namespace PowerBox
             int toRead = std::min(avail > 0 ? avail : 1, (int)sizeof(tmp));
             toRead = std::min(toRead, maxlen - 1); /* avoid exceeding caller buffer */
 
-            ssize_t n = ::read(fd, tmp, toRead);
+            ssize_t n = ::read((int)fd, tmp, toRead);
             if (n < 0)
             {
                 if (errno == EINTR || errno == EAGAIN)
@@ -402,27 +404,27 @@ namespace PowerBox
 
     void SerialPort::Flush()
     {
-        if (fd >= 0)
+        if (fd != -1)
         {
 #ifdef _WIN32
-            HANDLE h = (HANDLE)(intptr_t)fd;
+            HANDLE h = (HANDLE)fd;
             PurgeComm(h, PURGE_RXCLEAR | PURGE_TXCLEAR);
 #else
-            tcflush(fd, TCIOFLUSH);
+            tcflush((int)fd, TCIOFLUSH);
 #endif
         }
     }
 
     void SerialPort::Drain()
     {
-        if (fd >= 0)
+        if (fd != -1)
         {
 #ifdef _WIN32
-            HANDLE h = (HANDLE)(intptr_t)fd;
+            HANDLE h = (HANDLE)fd;
             // Wait briefly; FlushFileBuffers already used after write
             FlushFileBuffers(h);
 #else
-            tcdrain(fd);
+            tcdrain((int)fd);
 #endif
         }
     }

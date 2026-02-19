@@ -39,9 +39,11 @@ namespace PowerBox
     class SerialPort
     {
     private:
-        int fd = -1;
+        intptr_t fd = -1;
         std::string rxBuffer; /* leftover bytes read from device */
         std::mutex rxMutex;   /* guards rxBuffer */
+        int maxRetries = 3;   /* number of retries when port is busy */
+        int retryDelayMs = 200; /* delay between retry attempts in milliseconds */
 
     public:
         SerialPort() {}
@@ -49,10 +51,25 @@ namespace PowerBox
 
         /**
          * Open a serial port device.
+         * 
+         * Implements retry logic for handling busy ports (e.g., when other tools
+         * are scanning the port). Uses exponential backoff between attempts.
+         * 
          * @param portName Device path (e.g., "/dev/ttyUSB0" or "COM3")
          * @return true if successfully opened and configured
          */
         bool Open(const char *portName);
+
+        /**
+         * Set retry parameters for opening the serial port.
+         * @param maxRetries Maximum number of retry attempts (default: 3)
+         * @param retryDelayMs Initial delay between attempts in milliseconds (default: 100)
+         */
+        void SetRetryParams(int maxRetries, int retryDelayMs)
+        {
+            this->maxRetries = maxRetries > 0 ? maxRetries : 1;
+            this->retryDelayMs = retryDelayMs > 0 ? retryDelayMs : 1;
+        }
 
         /**
          * Close the serial port.
@@ -95,13 +112,13 @@ namespace PowerBox
          * Check if the serial port is open.
          * @return true if port is open
          */
-        bool IsOpen() { return fd >= 0; }
+        bool IsOpen() { return fd != -1; }
 
         /**
          * Get the file descriptor for the serial port.
          * @return File descriptor or -1 if closed
          */
-        int GetFD() { return fd; }
+        intptr_t GetFD() { return fd; }
     };
 
 } /* namespace PowerBox */

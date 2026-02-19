@@ -33,6 +33,7 @@
 #include <mutex>
 #include <thread>
 #include <atomic>
+#include <condition_variable>
 
 namespace PowerBox
 {
@@ -50,9 +51,10 @@ namespace PowerBox
 
         // Status
         int upTime = 0;
-        float temperature = 0.0f;
-        float humidity = 0.0f;
-        float dewPoint = 0.0f;
+        float temperature = -127.0f;
+        float humidity = -127.0f;
+        float dewPoint = -127.0f;
+        int extSensor = 0;
 
         // Supply status
         float supply12V = 0.0f;
@@ -76,7 +78,7 @@ namespace PowerBox
         int dewPWM[PB_NUM_DEW_PORTS] = {0};
         int dewState[PB_NUM_DEW_PORTS] = {0};
         int dewPwmResolution = 0;
-        int dewThreshold[PB_NUM_DEW_PORTS] = {0};
+        float dewThreshold[PB_NUM_DEW_PORTS] = {0};
         int dewAuto[PB_NUM_DEW_PORTS] = {0};
         int dewOvercurrent[PB_NUM_DEW_PORTS] = {0};
         float buckCurrent = 0.0f;
@@ -99,10 +101,49 @@ namespace PowerBox
         int envUpdateRate = 3;
         int updateRate = 1;
 
+        // WiFi scan results
+        PB_WIFI_SCAN_RESULT wifiScanResult = {0};
+        std::mutex wifiScanMutex;
+        std::condition_variable wifiScanCV;
+        std::atomic<bool> wifiScanPending{false};
+
+        // WiFi current status
+        int wifiMode = 0;                           /* Current WiFi mode (0 = AP, 1 = Client) */
+        int wifiChannel = 0;                        /* Current WiFi channel */
+        char wifiSSID[PB_SSID_LEN] = {0};         /* Current WiFi SSID */
+        char wifiIP[PB_IP_LEN] = {0};             /* Device IP address */
+        int wifiRSSI = 0;                         /* WiFi signal strength */
+        char wifiHostname[PB_HOSTNAME_LEN] = {0}; /* Device hostname */
+        std::mutex wifiInfoMutex;
+        std::condition_variable wifiInfoCV;
+        std::atomic<bool> wifiInfoPending{false};
+
+        /* Config mutexes etc */
+        std::mutex handshakeMutex;
+        std::mutex envModelMutex;
+        std::mutex updateRateMutex;
+        std::mutex pwrConfigMutex;
+        std::mutex usbConfigMutex;
+        std::mutex dewConfigMutex;
+        std::mutex adjConfigMutex;
+        std::condition_variable handshakeCV;
+        std::condition_variable envModelCV;
+        std::condition_variable updateRateCV;
+        std::condition_variable pwrConfigCV;
+        std::condition_variable usbConfigCV;
+        std::condition_variable dewConfigCV;
+        std::condition_variable adjConfigCV;
+        std::atomic<bool> handshakePending{false};
+        std::atomic<bool> envModelPending{false};
+        std::atomic<bool> updateRatePending{false};
+        std::atomic<bool> pwrConfigPending{false};
+        std::atomic<bool> usbConfigPending{false};
+        std::atomic<bool> dewConfigPending{false};
+        std::atomic<bool> adjConfigPending{false};
+
         /* Listener thread state - don't store thread, just the flag */
-        std::atomic<bool> listenerRunning{false};
+        std::atomic<bool> statusListenerRunning{false};
         std::atomic<bool> isOpen{false};
-        std::mutex listenerMutex;
 
         /* Simple destructor - nothing to clean up */
         ~Device() = default;

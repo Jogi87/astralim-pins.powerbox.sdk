@@ -40,10 +40,15 @@ add_library(PowerBoxSDK SHARED
     PowerBoxLogging.cpp
     PowerBoxSerialPort.cpp
     PowerBoxDevice.cpp
-    PowerBoxProtocol.cpp)
+    PowerBoxProtocol.cpp
+    base64.cpp)
 
 # Public headers
 target_include_directories(PowerBoxSDK PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+
+# Find and link OpenSSL
+find_package(OpenSSL REQUIRED)
+target_link_libraries(PowerBoxSDK PRIVATE OpenSSL::Crypto)
 
 # Link libudev
 if(UNIX)

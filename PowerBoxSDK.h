@@ -37,9 +37,15 @@ extern "C"
 #endif
 
 #define PB_MAX_NUM 32               /* Maximum device numbers supported by this SDK */
+#define PB_MAX_WIFI_NETWORKS 32     /* Maximum WiFi networks in scan results */
 #define PB_NAME_LEN 32              /* Buffer length for name strings */
 #define PB_VERSION_LEN 32           /* Buffer length for version strings */
 #define PB_UUID_LEN 37              /* Buffer length for UUID */
+#define PB_IP_LEN 16                /* Buffer length for IP address */
+#define PB_SSID_LEN 32              /* Maximum SSID length */
+#define PB_HOSTNAME_LEN 32          /* Maximum hostname length */
+#define PB_PASSWORD_LEN 64          /* Maximum WiFi password length */
+
 
 #define PB_NUM_POWER_PORTS 6
 #define PB_NUM_USB_PORTS 6
@@ -53,7 +59,15 @@ extern "C"
         PB_ERROR_INVALID_STATE,     /* Device is not in correct state for specific API call */
         PB_ERROR_COMMUNICATION,     /* Data communication error such as device has been removed from USB port */
         PB_ERROR_NULL_POINTER,      /* Caller passes null-pointer parameter which is not expected */
+        PB_ERROR_TIMEOUT,           /* Function call timed out */
     } PB_ERROR_TYPE;
+
+    typedef enum _PB_WIFI_MODE
+    {
+        PB_WIFI_MODE_AP = 0,
+        PB_WIFI_MODE_CLIENT = 1,
+        PB_WIFI_MODE_OFF = 2
+    } PB_WIFI_MODE;
 
 /*
  * Used by PBxxxSetConfig() to indicate which field wants to be set
@@ -62,8 +76,9 @@ extern "C"
 #define MASK_PB_HUMIDITY_OFFSET    0x02 /* Humidity offset */
 #define MASK_PB_ENV_UPDATE_RATE    0x04 /* Environment update rate */
 #define MASK_PB_UPDATE_RATE        0x08 /* Property update rate */
-#define MASK_PB_OVERCURRENT_RESET  0x10 /* Overcurrent reset */
-#define MASK_PB_ALL                0x1F /* All valid masks combined */
+#define MASK_PB_EXT_TEMPERATURE    0x10 /* External temperature */
+#define MASK_PB_EXT_HUMIDITY       0x20 /* External humidity */
+#define MASK_PB_ALL                0x3F /* All valid masks combined */
 
     typedef struct _PB_VERSION
     {
@@ -80,7 +95,8 @@ extern "C"
         float humidityOffset;           /* Temperature offset [-12.5, +12.5] [%] */
         int envUpdateRate;              /* Sensor refresh rate [s], default: 3s */
         int updateRate;                 /* Property refresh rate [s], default: 1s */
-        int overcurrentReset;           /* Reset overcurrent flag */
+        float temperature;              /* Set temperature externally */
+        float humidity;                 /* Set humidity externally */
     } PB_DEVICE_CONFIG;
 
     typedef struct _PB_DEVICE_STATUS
@@ -89,6 +105,7 @@ extern "C"
         float temperature;          /* Ambient temperature [°C] */
         float humidity;             /* Humidity [%] */
         float dewPoint;             /* Dew Point [°C] */
+        int extSensor;              /* External sensor connected flag */
     } PB_DEVICE_STATUS;
 
     typedef struct _PB_SUPPLY_STATUS
@@ -141,6 +158,25 @@ extern "C"
         int pwm;                                     /* PWM value [%] */
     } PB_PWM_PORT_STATUS;
 
+    typedef struct _PB_WIFI_STATUS
+    {
+        char IP[PB_IP_LEN];
+        int rssi;
+    } PB_WIFI_STATUS;
+
+    typedef struct _PB_WIFI_NETWORK
+    {
+        char ssid[PB_SSID_LEN];
+        int rssi;
+        int channel;
+    } PB_WIFI_NETWORK;
+
+    typedef struct _PB_WIFI_SCAN_RESULT
+    {
+        int count;
+        PB_WIFI_NETWORK networks[PB_MAX_WIFI_NETWORKS];
+    } PB_WIFI_SCAN_RESULT;
+
 /*
  * Mask definitions for port configs - reused across different port types
  * Each structure only uses the masks that apply to its fields
@@ -151,7 +187,8 @@ extern "C"
 #define MASK_PORT_AUTO_DEW_THRESHOLD    0x08    /* Auto dew threshold (dew only) */
 #define MASK_PORT_POWER                 0x10    /* Power percentage (dew, pwm) */
 #define MASK_PORT_VOLTAGE               0x20    /* Voltage (buck only) */
-#define MASK_PORT_ALL                   0x3F    /* All valid masks combined */
+#define MASK_PORT_OVERCURRENT_RESET     0x40    /* Overcurrent reset */
+#define MASK_PORT_ALL                   0x7F    /* All valid masks combined */
 
     typedef struct _PB_POWER_PORT_CONFIG
     {
@@ -159,6 +196,7 @@ extern "C"
         unsigned int index;     /* Which port to update */
         int enabled;            /* Enable/disable each power port */
         int bootState;          /* Power port state on boot */
+        int overcurrentReset;   /* Reset overcurrent flag */
     } PB_POWER_PORT_CONFIG;
 
     typedef struct _PB_USB_PORT_CONFIG
@@ -167,6 +205,7 @@ extern "C"
         unsigned int index;         /* Which port to update */
         int enabled;                /* Enable/disable the USB port */
         int bootState;              /* USB port state on boot */
+        int overcurrentReset;   /* Reset overcurrent flag */
     } PB_USB_PORT_CONFIG;
 
     typedef struct _PB_DEW_PORT_CONFIG
@@ -176,29 +215,51 @@ extern "C"
         int enabled;                /* Enable/disable the dew heater */
         int autoMode;               /* Auto mode (automatic regulation) */
         float autoThreshold;        /* Auto dew threshold gap [°C] (dew point - probe temperature) */
-        int power;                  /* Dew heater power [%] */
+        int power;                  /* Dew heater PWM value (0 to 2^pwmResolution-1, see PB_DEW_PORT_STATUS) */
+        int overcurrentReset;   /* Reset overcurrent flag */
     } PB_DEW_PORT_CONFIG;
 
     typedef struct _PB_BUCK_PORT_CONFIG
     {
         unsigned int mask;          /* Which fields to update */
-        float voltage;              /* Output voltage [V] */
+        float targetVoltage;        /* Target voltage [V] */
         int enabled;                /* Enable/disable the buck converter */
         int bootState;              /* Buck converter state on boot */
+        int overcurrentReset;   /* Reset overcurrent flag */
     } PB_BUCK_PORT_CONFIG;
 
     typedef struct _PB_PWM_PORT_CONFIG
     {
         unsigned int mask;          /* Which fields to update */
         int enabled;                /* Enable/disable the PWM port */
-        int power;                  /* PWM port power [%] */
+        int power;                  /* PWM value (0 to 2^pwmResolution-1, see PB_PWM_PORT_STATUS) */
+        int overcurrentReset;   /* Reset overcurrent flag */
     } PB_PWM_PORT_CONFIG;
 
-        /* Device scanning and management */
-    PBAPI PB_ERROR_TYPE PBScan(int *number, int *ids);
+#define MASK_WIFI_MODE                  0x01
+#define MASK_WIFI_SSID                  0x02
+#define MASK_WIFI_PASSWORD              0x04
+#define MASK_WIFI_CHANNEL               0x08
+#define MASK_WIFI_HOSTNAME              0x10
+#define MASK_WIFI_ALL                   0x1F
+
+    typedef struct _PB_WIFI_CONFIG
+    {
+        unsigned int mask;
+        PB_WIFI_MODE mode;
+        char ssid[PB_SSID_LEN];
+        char pass[PB_PASSWORD_LEN];
+        char hostname[PB_HOSTNAME_LEN];
+        int channel;
+    } PB_WIFI_CONFIG;
+
+    /* Device scanning and management */
+    PBAPI PB_ERROR_TYPE
+    PBScan(int *number, int *ids);
     PBAPI PB_ERROR_TYPE PBOpen(int id);
     PBAPI PB_ERROR_TYPE PBClose(int id);
     PBAPI PB_ERROR_TYPE PBGetSerial(int id, char *serial);
+    PBAPI PB_ERROR_TYPE PBScanWiFi(int id, PB_WIFI_SCAN_RESULT *result);
 
     /* Configuration */
     PBAPI PB_ERROR_TYPE PBGetConfig(int id, PB_DEVICE_CONFIG *config);
@@ -213,9 +274,12 @@ extern "C"
     PBAPI PB_ERROR_TYPE PBSetBuckPortConfig(int id, PB_BUCK_PORT_CONFIG *config);
     PBAPI PB_ERROR_TYPE PBGetPWMPortConfig(int id, PB_PWM_PORT_CONFIG *config);
     PBAPI PB_ERROR_TYPE PBSetPWMPortConfig(int id, PB_PWM_PORT_CONFIG *config);
+    PBAPI PB_ERROR_TYPE PBGetWiFiConfig(int id, PB_WIFI_CONFIG *config);
+    PBAPI PB_ERROR_TYPE PBSetWiFiConfig(int id, PB_WIFI_CONFIG *config);
 
     /* Status and information */
     PBAPI PB_ERROR_TYPE PBGetStatus(int id, PB_DEVICE_STATUS *status);
+    PBAPI PB_ERROR_TYPE PBGetWiFiStatus(int id, PB_WIFI_STATUS *status);
     PBAPI PB_ERROR_TYPE PBGetSupplyStatus(int id, PB_SUPPLY_STATUS *status);
     PBAPI PB_ERROR_TYPE PBGetPowerPortStatus(int id, PB_POWER_PORT_STATUS *status);
     PBAPI PB_ERROR_TYPE PBGetUSBPortStatus(int id, PB_USB_PORT_STATUS *status);

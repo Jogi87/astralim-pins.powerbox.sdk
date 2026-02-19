@@ -29,15 +29,17 @@
 #include <memory>
 #include <chrono>
 #include <thread>
-#ifdef __unix__
-#include <termios.h>
-#endif
 
 namespace PowerBox
 {
     bool SendCommand(std::shared_ptr<Device> device, const char *command, int timeoutMs)
     {
-        if (!device || !device->port || !device->port->IsOpen())
+        if (!device)
+        {
+            return PB_ERROR_NULL_POINTER;
+        }
+
+        if (!device->port || !device->port->IsOpen())
         {
             PB_DEBUG("SendCommand: device=%p, port=%p, isOpen=%d",
                      device.get(), device ? device->port.get() : nullptr,
@@ -58,451 +60,352 @@ namespace PowerBox
         return true;
     }
 
-    bool QueryHandshake(std::shared_ptr<Device> device)
+    /* Message parsing helper functions */
+    static void ParseHandshakeMessage(std::shared_ptr<Device> device, const char *buffer)
     {
-        if (!device || !device->port)
+        char model[33];
+        char uuid[41];
+        char serial[33];
+        int firmware;
+        if (sscanf(buffer, "PINS:%32[^:]:%40[^:]:%32[^:]:%d#",
+                   model, uuid, serial, &firmware) == 4)
         {
-            return false;
+            // Store in device
+            device->modelType = model;
+            device->uuid = uuid;
+            device->serial = serial;
+            device->firmwareVersion = firmware;
+            device->handshakePending = false;
         }
 
-        PB_DEBUG("QueryHandshake: started for device %s", device->portName.c_str());
+        device->handshakeCV.notify_one();
+    }
 
-        if (!device->port->IsOpen())
+    static void ParseUptimeMessage(std::shared_ptr<Device> device, const char *buffer)
+    {
+        sscanf(buffer, "UP:%d#", &device->upTime);
+    }
+
+    static void ParseEnvironmentMessage(std::shared_ptr<Device> device, const char *buffer)
+    {
+        sscanf(buffer, "ENV:%f:%f:%f:%d#", &device->temperature, &device->humidity, &device->dewPoint, &device->extSensor);
+    }
+
+    static void ParseEnvModelMessage(std::shared_ptr<Device> device, const char *buffer)
+    {
+        float tempOffset, humOffset;
+        int envUpdate;
+        if (sscanf(buffer, "ENVMODEL:%f:%f:%d#", &tempOffset, &humOffset, &envUpdate) == 3)
         {
-            PB_DEBUG("QueryHandshake: Port not open");
-            return false;
-        }
-
-        // Wait for port to fully stabilize
-        std::this_thread::sleep_for(std::chrono::milliseconds(200));
-
-        char response[128];
-
-        // Flush kernel AND application buffers multiple times to ensure clean state
-        device->port->Flush();
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
-        device->port->Flush();
-
-        // Aggressively drain any residual data in kernel buffer
-        // Read with short timeout repeatedly until nothing remains
-        PB_DEBUG("QueryHandshake: Aggressively draining residual data");
-        unsigned char drainBuf[256];
-        int drainAttempts = 0;
-        while (drainAttempts < 10)
-        {
-            int n = device->port->Read(drainBuf, sizeof(drainBuf), '#', 20);
-            if (n <= 0)
+            // Store in device
             {
-                // No more data available
-                break;
-            }
-            PB_DEBUG("QueryHandshake: Drained attempt %d: %d bytes", drainAttempts, n);
-            drainAttempts++;
-        }
-
-        // One final flush after draining to ensure clean state
-        device->port->Flush();
-
-        // Send initial handshake and retry periodically if no response
-        auto start = std::chrono::high_resolution_clock::now();
-        const int totalTimeoutMs = 15000;
-        auto lastHandshakeSent = start;
-        const int handshakeRetryIntervalMs = 600; // Resend handshake every 600ms
-
-        // Send initial handshake
-        if (!device->port->Write((const unsigned char *)":HS#", 4))
-        {
-            PB_DEBUG("Handshake: Writing to serial failed");
-            return false;
-        }
-
-        PB_DEBUG("Handshake: Sent initial command");
-        std::this_thread::sleep_for(std::chrono::milliseconds(50)); // Give device time to process
-
-        while (true)
-        {
-            auto now = std::chrono::high_resolution_clock::now();
-            auto elapsed = now - start;
-            int elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
-            int remainingMs = totalTimeoutMs - elapsedMs;
-            if (remainingMs <= 0)
-            {
-                PB_DEBUG("Handshake: timeout waiting for device response after %dms", elapsedMs);
-                return false;
+                device->temperatureOffset = tempOffset;
+                device->humidityOffset = humOffset;
+                device->envUpdateRate = envUpdate;
+                device->envModelPending = false;
             }
 
-            // Check if we should resend the handshake command
-            auto timeSinceLastHandshake = now - lastHandshakeSent;
-            int msSinceLastHandshake = std::chrono::duration_cast<std::chrono::milliseconds>(timeSinceLastHandshake).count();
-            if (msSinceLastHandshake >= handshakeRetryIntervalMs)
+            device->envModelCV.notify_one();
+        }
+    }
+
+    static void ParseUpdateRateMessage(std::shared_ptr<Device> device, const char *buffer)
+    {
+        int rate;
+        if (sscanf(buffer, "UDR:%d#", &rate) == 1)
+        {
+            // Store in device
             {
-                PB_DEBUG("Handshake: Resending handshake command (attempt at %dms)", elapsedMs);
-                if (!device->port->Write((const unsigned char *)":HS#", 4))
+                device->updateRate = rate;
+                device->updateRatePending = false;
+            }
+
+            device->updateRateCV.notify_one();
+        }
+    }
+
+    static void ParsePowerSupplyMessage(std::shared_ptr<Device> device, const char *buffer)
+    {
+        int mV12, mA12, mV5;
+        float mAh12, mWh12;
+        sscanf(buffer, "PSUP:%d:%d:%d:%f:%f#", &mV12, &mA12, &mV5, &mAh12, &mWh12);
+        device->supply12V = mV12 / 1000.0f;
+        device->supply12A = mA12 / 1000.0f;
+        device->supply5V = mV5 / 1000.0f;
+        device->supply12Ah = mAh12 / 1000.0f;
+        device->supply12Wh = mWh12 / 1000.0f;
+    }
+
+    static void ParsePowerOutputMessage(std::shared_ptr<Device> device, const char *buffer)
+    {
+        int mA[6];
+        sscanf(buffer, "POUT:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d#",
+               &mA[0], &device->powerOvercurrent[0],
+               &mA[1], &device->powerOvercurrent[1],
+               &mA[2], &device->powerOvercurrent[2],
+               &mA[3], &device->powerOvercurrent[3],
+               &mA[4], &device->powerOvercurrent[4],
+               &mA[5], &device->powerOvercurrent[5]);
+        for (int i = 0; i < 6; ++i)
+        {
+            device->powerCurrent[i] = mA[i] / 1000.0f;
+        }
+    }
+
+    static void ParsePowerOutputConfigMessage(std::shared_ptr<Device> device, const char *buffer)
+    {
+        int state[6], boot[6];
+        if(sscanf(buffer, "POUTS:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d#",
+               &state[0], &boot[0], &state[1], &boot[1], &state[2], &boot[2],
+               &state[3], &boot[3], &state[4], &boot[4], &state[5], &boot[5]) == 12)
+        {
+            // Store in device
+            {
+                for (int i = 0; i < 6; ++i)
                 {
-                    PB_DEBUG("Handshake: Retry write failed");
-                    return false;
+                    device->powerState[i] = state[i];
+                    device->powerBootstrap[i] = boot[i];
                 }
-                std::this_thread::sleep_for(std::chrono::milliseconds(50));
-                lastHandshakeSent = now;
+                device->pwrConfigPending = false;
             }
 
-            // Use shorter read timeout to allow checking for retry interval
-            int readTimeoutMs = std::min(remainingMs, handshakeRetryIntervalMs);
-            int n = device->port->Read((unsigned char *)response, 128, '#', readTimeoutMs);
-            if (!n)
-            {
-                // Timeout on read - continue loop to potentially retry handshake
-                continue;
-            }
+            device->pwrConfigCV.notify_one();
+        }
+    }
 
-            char model[32];
-            char uuid[40];
-            char serial[32];
-            char *p = strstr(response, "PINS:");
-            if (p && sscanf(p, "PINS:%32[^:]:%40[^:]:%16[^:]:%d#", model, uuid, serial, &device->firmwareVersion) == 4)
-            {
-                device->modelType = model;
-                device->uuid = uuid;
-                device->serial = serial;
-                return true;
-            }
+    static void ParseUSBMessage(std::shared_ptr<Device> device, const char *buffer)
+    {
+        int usbV[6];
+        int usbA[6];
+        sscanf(buffer, "USB:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d#",
+                &usbA[0], &usbV[0], &device->usbOvercurrent[0],
+                &usbA[1], &usbV[1], &device->usbOvercurrent[1],
+                &usbA[2], &usbV[2], &device->usbOvercurrent[2],
+                &usbA[3], &usbV[3], &device->usbOvercurrent[3],
+                &usbA[4], &usbV[4], &device->usbOvercurrent[4],
+                &usbA[5], &usbV[5], &device->usbOvercurrent[5]);
+        for (int i = 0; i < 6; ++i)
+        {
+            device->usbCurrent[i] = usbA[i] / 1000.0f;
+            device->usbVoltage[i] = usbV[i] / 1000.0f;
+        }
+    }
 
-            /* If we got a response that looks like a UUID/serial/firmware but missing the PINS: prefix,
-               it means we got a truncated handshake response. This sometimes happens on first attempts.
-               Instead of waiting, immediately resend the handshake without waiting for the retry interval. */
-            if (strstr(response, "POWERBOX") || (strlen(response) > 40 && strstr(response, ":")))
+    static void ParseUSBConfigMessage(std::shared_ptr<Device> device, const char *buffer)
+    {
+        int state[6], boot[6];
+        if(sscanf(buffer, "USBS:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d#",
+               &state[0], &boot[0], &state[1], &boot[1], &state[2], &boot[2],
+               &state[3], &boot[3], &state[4], &boot[4], &state[5], &boot[5]) == 12)
+        {
+            // Store in device
             {
-                PB_DEBUG("Handshake: Got truncated response, immediately retrying");
-                if (!device->port->Write((const unsigned char *)":HS#", 4))
+                for (int i = 0; i < 6; ++i)
                 {
-                    PB_DEBUG("Handshake: Retry write failed");
-                    return false;
+                    device->usbState[i] = state[i];
+                    device->usbBootstrap[i] = boot[i];
                 }
-                std::this_thread::sleep_for(std::chrono::milliseconds(150));
-                lastHandshakeSent = std::chrono::high_resolution_clock::now();
-                continue;
+                device->usbConfigPending = false;
             }
 
-            PB_DEBUG("Handshake: Ignored unrelated message: %s", response);
-            /* loop and wait for the correct message until timeout */
+            device->usbConfigCV.notify_one();
         }
     }
 
-    bool QueryEnv(std::shared_ptr<Device> device)
+    static void ParseDewMessage(std::shared_ptr<Device> device, const char *buffer)
     {
-        if(!device || !device->port)
+        int dewA[2];
+        sscanf(buffer, "DEW:%d:%f:%d:%d:%d:%d:%f:%d:%d:%d#",
+               &dewA[0], &device->dewProbe[0], &device->dewPWM[0], &device->dewState[0], &device->dewOvercurrent[0],
+               &dewA[1], &device->dewProbe[1], &device->dewPWM[1], &device->dewState[1], &device->dewOvercurrent[1]);
+        for (int i = 0; i < 2; ++i)
         {
-            PB_DEBUG("QueryEnv: invalid device");
-            return false;
+            device->dewCurrent[i] = dewA[i] / 1000.0f;
         }
-
-        PB_DEBUG("QueryEnv: started for device %s", device->portName.c_str());
-
-        if (!device->port->IsOpen())
-        {
-            PB_DEBUG("QueryEnv: Port not open");
-            return false;
-        }
-
-        device->port->Flush();
-        if (!device->port->Write((const unsigned char *)":GES#", 5))
-        {
-            PB_DEBUG("Handshake: Writing to serial failed");
-            return false;
-        }
-
-        // Read device status - ignore unrelated messages that may arrive
-        char response[64];
-        auto start = std::chrono::high_resolution_clock::now();
-        const int totalTimeoutMs = 3000;
-
-        while (true)
-        {
-            auto elapsed = std::chrono::high_resolution_clock::now() - start;
-            int elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
-            int remainingMs = totalTimeoutMs - elapsedMs;
-            if (remainingMs <= 0)
-            {
-                PB_DEBUG("QueryEnv: timeout reading from serial");
-                return false;
-            }
-
-            int n = device->port->Read((unsigned char *)response, 64, '#', remainingMs);
-            if (!n)
-            {
-                PB_DEBUG("QueryEnv: timeout reading from serial");
-                return false;
-            }
-
-            char *p = strstr(response, "ENVMODEL:");
-            if (p && sscanf(p,
-                       "ENVMODEL:%f:%f:%d#",
-                       &device->temperatureOffset,
-                       &device->humidityOffset,
-                       &device->envUpdateRate) == 3)
-            {
-                break; /* got the expected message */
-            }
-
-            PB_DEBUG("QueryEnv: Ignored unrelated message: %s", response);
-            /* loop and wait for the correct message until timeout */
-        }
-
-        PB_DEBUG("QueryEnv: Successfully parsed, model=%s", device->modelType.c_str());
-        return true;
     }
 
-    bool QueryPowerStatus(std::shared_ptr<Device> device)
+    static void ParseDewConfigMessage(std::shared_ptr<Device> device, const char *buffer)
     {
-        if(!device || !device->port)
+        int pwmres, auto0, auto1, state0, state1;
+        float thres0, thres1;
+        if(sscanf(buffer, "DEWS:%d:%f:%d:%d:%f:%d:%d#",
+                  &pwmres,
+                  &thres0, &auto0, &state0,
+                  &thres1, &auto1, &state1) == 7)
         {
-            PB_DEBUG("QueryStatus: invalid device");
-            return false;
-        }
-
-        PB_DEBUG("QueryStatus: started for device %s", device->portName.c_str());
-
-        if (!device->port->IsOpen())
-        {
-            PB_DEBUG("QueryStatus: Port not open");
-            return false;
-        }
-
-        device->port->Flush();
-        if (!device->port->Write((const unsigned char *)":GPS#", 5))
-        {
-            PB_DEBUG("Handshake: Writing to serial failed");
-            return false;
-        }
-
-        // Read device status - ignore unrelated messages that may arrive
-        char response[256];
-        auto start = std::chrono::high_resolution_clock::now();
-        const int totalTimeoutMs = 3000;
-
-        while (true)
-        {
-            auto elapsed = std::chrono::high_resolution_clock::now() - start;
-            int elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
-            int remainingMs = totalTimeoutMs - elapsedMs;
-            if (remainingMs <= 0)
+            // Store in device
             {
-                PB_DEBUG("QueryStatus: timeout reading from serial");
-                return false;
+                std::lock_guard<std::mutex> lock(device->dewConfigMutex);
+                device->dewPwmResolution = pwmres;
+                device->dewThreshold[0] = thres0;
+                device->dewAuto[0] = auto0;
+                device->dewState[0] = state0;
+                device->dewThreshold[1] = thres1;
+                device->dewAuto[1] = auto1;
+                device->dewState[1] = state1;
+                device->dewConfigPending = false;
             }
 
-            int n = device->port->Read((unsigned char *)response, 256, '#', remainingMs);
-            if (!n)
-            {
-                PB_DEBUG("QueryStatus: timeout reading from serial");
-                return false;
-            }
-
-            char *p = strstr(response, "POUTS:");
-            if (p && sscanf(p, "POUTS:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d#",
-                            &device->powerState[0], &device->powerBootstrap[0],
-                            &device->powerState[1], &device->powerBootstrap[1],
-                            &device->powerState[2], &device->powerBootstrap[2],
-                            &device->powerState[3], &device->powerBootstrap[3],
-                            &device->powerState[4], &device->powerBootstrap[4],
-                            &device->powerState[5], &device->powerBootstrap[5]) == 12)
-            {
-                break;
-            }
-
-            PB_DEBUG("QueryStatus: Ignored unrelated message: %s", response);
+            device->dewConfigCV.notify_one();
         }
-
-        PB_DEBUG("QueryStatus: Successfully parsed, model=%s", device->modelType.c_str());
-        return true;
     }
 
-    bool QueryUSBStatus(std::shared_ptr<Device> device)
+    static void ParseAdjMessage(std::shared_ptr<Device> device, const char *buffer)
     {
-        if(!device || !device->port)
-        {
-            PB_DEBUG("QueryStatus: invalid device");
-            return false;
-        }
-
-        PB_DEBUG("QueryStatus: started for device %s", device->portName.c_str());
-
-        if (!device->port->IsOpen())
-        {
-            PB_DEBUG("QueryStatus: Port not open");
-            return false;
-        }
-
-        device->port->Flush();
-        if (!device->port->Write((const unsigned char *)":GUS#", 5))
-        {
-            PB_DEBUG("Handshake: Writing to serial failed");
-            return false;
-        }
-
-        // Read device status - ignore unrelated messages that may arrive
-        char response[256];
-        auto start = std::chrono::high_resolution_clock::now();
-        const int totalTimeoutMs = 3000;
-
-        while (true)
-        {
-            auto elapsed = std::chrono::high_resolution_clock::now() - start;
-            int elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
-            int remainingMs = totalTimeoutMs - elapsedMs;
-            if (remainingMs <= 0)
-            {
-                PB_DEBUG("QueryStatus: timeout reading from serial");
-                return false;
-            }
-
-            int n = device->port->Read((unsigned char *)response, 256, '#', remainingMs);
-            if (!n)
-            {
-                PB_DEBUG("QueryStatus: timeout reading from serial");
-                return false;
-            }
-
-            char *p = strstr(response, "USBS:");
-            if (p && sscanf(p, "USBS:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d#",
-                            &device->usbState[0], &device->usbBootstrap[0],
-                            &device->usbState[1], &device->usbBootstrap[1],
-                            &device->usbState[2], &device->usbBootstrap[2],
-                            &device->usbState[3], &device->usbBootstrap[3],
-                            &device->usbState[4], &device->usbBootstrap[4],
-                            &device->usbState[5], &device->usbBootstrap[5]) == 12)
-            {
-                break;
-            }
-
-            PB_DEBUG("QueryStatus: Ignored unrelated message: %s", response);
-        }
-
-        PB_DEBUG("QueryStatus: Successfully parsed, model=%s", device->modelType.c_str());
-        return true;
+        int adjA[2], Vadc, Vmin, Vmax, Vset;
+        sscanf(buffer, "ADJ:%d:%d:%d:%d:%d:%d:%d:%d:%d#",
+               &adjA[0], &Vset, &Vadc, &Vmin, &Vmax, &device->buckOvercurrent,
+               &adjA[1], &device->pwmPWM, &device->pwmOvercurrent);
+        device->buckCurrent = adjA[0] / 1000.0f;
+        device->buckVoltage = Vadc / 1000.0f;
+        device->buckVmin = Vmin / 1000.0f;
+        device->buckVmax = Vmax / 1000.0f;
+        device->buckVset = Vset / 1000.0f;
+        device->pwmCurrent = adjA[1] / 1000.0f;
     }
 
-    bool QueryDewStatus(std::shared_ptr<Device> device)
+    static void ParseAdjConfigMessage(std::shared_ptr<Device> device, const char *buffer)
     {
-        if(!device || !device->port)
+        int bootstate, state, pwmstate, pwmres;
+        if (sscanf(buffer, "ADJS:%d:%d:%d:%d#", &bootstate, &state, &pwmstate, &pwmres) == 4)
         {
-            PB_DEBUG("QueryStatus: invalid device");
-            return false;
-        }
-
-        PB_DEBUG("QueryStatus: started for device %s", device->portName.c_str());
-
-        if (!device->port->IsOpen())
-        {
-            PB_DEBUG("QueryStatus: Port not open");
-            return false;
-        }
-
-        device->port->Flush();
-        if (!device->port->Write((const unsigned char *)":GDS#", 5))
-        {
-            PB_DEBUG("Handshake: Writing to serial failed");
-            return false;
-        }
-
-        // Read device status - ignore unrelated messages that may arrive
-        char response[256];
-        auto start = std::chrono::high_resolution_clock::now();
-        const int totalTimeoutMs = 3000;
-
-        while (true)
-        {
-            auto elapsed = std::chrono::high_resolution_clock::now() - start;
-            int elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
-            int remainingMs = totalTimeoutMs - elapsedMs;
-            if (remainingMs <= 0)
+            // Store in device
             {
-                PB_DEBUG("QueryStatus: timeout reading from serial");
-                return false;
+                std::lock_guard<std::mutex> lock(device->adjConfigMutex);
+                device->buckBootstrap = bootstate;
+                device->buckState = state;
+                device->pwmState = pwmstate;
+                device->pwmPwmResolution = pwmres;
+                device->adjConfigPending = false;
             }
 
-            int n = device->port->Read((unsigned char *)response, 256, '#', remainingMs);
-            if (!n)
-            {
-                PB_DEBUG("QueryStatus: timeout reading from serial");
-                return false;
-            }
-
-            char *p = strstr(response, "DEWS:");
-            if (p && sscanf(p, "DEWS:%d:%d:%d:%d:%d#",
-                            &device->dewPwmResolution,
-                            &device->dewThreshold[0], &device->dewAuto[0],
-                            &device->dewThreshold[1], &device->dewAuto[1]) == 5)
-            {
-                break;
-            }
-
-            PB_DEBUG("QueryStatus: Ignored unrelated message: %s", response);
+            device->adjConfigCV.notify_one();
         }
-
-        PB_DEBUG("QueryStatus: Successfully parsed, model=%s", device->modelType.c_str());
-        return true;
     }
 
-    bool QueryAdjStatus(std::shared_ptr<Device> device)
+    static void ParseWiFiInfoMessage(std::shared_ptr<Device> device, const char *buffer)
     {
-        if(!device || !device->port)
+        int mode, channel, rssi, hostnameLen;
+        char ssid[PB_SSID_LEN] = {0};
+        char ip[PB_IP_LEN] = {0};
+        char hostname[PB_HOSTNAME_LEN] = {0};
+
+        if (sscanf(buffer, "WIFI:%d:%d:%31[^:]:%15[^:]:%d:%d:", 
+                   &mode, &channel, ssid, ip, &rssi, &hostnameLen) == 6)
         {
-            PB_DEBUG("QueryStatus: invalid device");
-            return false;
-        }
-
-        PB_DEBUG("QueryStatus: started for device %s", device->portName.c_str());
-
-        if (!device->port->IsOpen())
-        {
-            PB_DEBUG("QueryStatus: Port not open");
-            return false;
-        }
-
-        device->port->Flush();
-        if (!device->port->Write((const unsigned char *)":GAS#", 5))
-        {
-            PB_DEBUG("Handshake: Writing to serial failed");
-            return false;
-        }
-
-        // Read device status - ignore unrelated messages that may arrive
-        char response[256];
-        auto start = std::chrono::high_resolution_clock::now();
-        const int totalTimeoutMs = 3000;
-
-        while (true)
-        {
-            auto elapsed = std::chrono::high_resolution_clock::now() - start;
-            int elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
-            int remainingMs = totalTimeoutMs - elapsedMs;
-            if (remainingMs <= 0)
+            // Find the hostname part (after the 7th colon)
+            const char *hostStart = buffer;
+            int colonCount = 0;
+            while (*hostStart && colonCount < 7)
             {
-                PB_DEBUG("QueryStatus: timeout reading from serial");
-                return false;
+                if (*hostStart == ':')
+                {
+                    colonCount++;
+                }
+                hostStart++;
             }
 
-            int n = device->port->Read((unsigned char *)response, 256, '#', remainingMs);
-            if (!n)
+            // Copy hostname
+            if (hostnameLen > 0 && hostnameLen < PB_HOSTNAME_LEN)
             {
-                PB_DEBUG("QueryStatus: timeout reading from serial");
-                return false;
+                strncpy(hostname, hostStart, hostnameLen);
+                hostname[hostnameLen] = '\0';
             }
 
-            char *p = strstr(response, "ADJS:");
-            if (p && sscanf(p, "ADJS:%d:%d:%d:%d#",
-                            &device->buckBootstrap, &device->buckState,
-                            &device->pwmState, &device->pwmPwmResolution) == 4)
+            // Store in device
             {
-                break;
+                std::lock_guard<std::mutex> lock(device->wifiInfoMutex);
+                device->wifiMode = mode;
+                device->wifiChannel = channel;
+                strncpy(device->wifiSSID, ssid, PB_SSID_LEN - 1);
+                device->wifiSSID[PB_SSID_LEN - 1] = '\0';
+                strncpy(device->wifiIP, ip, PB_IP_LEN - 1);
+                device->wifiIP[PB_IP_LEN - 1] = '\0';
+                device->wifiRSSI = rssi;
+                strncpy(device->wifiHostname, hostname, PB_HOSTNAME_LEN - 1);
+                device->wifiHostname[PB_HOSTNAME_LEN - 1] = '\0';
+                device->wifiInfoPending = false;
             }
+            
+            PB_DEBUG("WiFi Info: mode=%d, channel=%d, ssid='%s', ip='%s', rssi=%d, hostname='%s'",
+                     mode, channel, ssid, ip, rssi, hostname);
+            
+            device->wifiInfoCV.notify_one();
+        }
+    }
 
-            PB_DEBUG("QueryStatus: Ignored unrelated message: %s", response);
+    static void ParseWiFiSurveyMessage(std::shared_ptr<Device> device, const char *buffer)
+    {
+        int networks;
+        if (sscanf(buffer, "WSURV:%d:", &networks) != 1 || networks > PB_MAX_WIFI_NETWORKS)
+        {
+            return;
         }
 
-        PB_DEBUG("QueryStatus: Successfully parsed, model=%s", device->modelType.c_str());
-        return true;
+        // Find the position after "WSURV:count:"
+        char *pos = strchr((char *)buffer + 6, ':'); // Find first ':' after WSURV
+        if (!pos)
+        {
+            return;
+        }
+        pos++; // Move past the ':'
+        
+        PB_DEBUG("WiFi Survey: Found %d networks", networks);
+        
+        // Lock and clear results
+        {
+            std::lock_guard<std::mutex> lock(device->wifiScanMutex);
+            device->wifiScanResult.count = 0;
+        }
+        
+        for (int i = 0; i < networks && i < PB_MAX_WIFI_NETWORKS; i++)
+        {
+            char ssid[PB_SSID_LEN] = {0};
+            int rssi = 0;
+            
+            // Parse SSID (everything until the next colon)
+            int ssidLen = 0;
+            while (*pos && *pos != ':' && ssidLen < PB_SSID_LEN - 1)
+            {
+                ssid[ssidLen++] = *pos++;
+            }
+            ssid[ssidLen] = '\0';
+            
+            if (*pos == ':')
+            {
+                pos++; // Skip the colon
+                // Parse RSSI (negative integer)
+                sscanf(pos, "%d", &rssi);
+                
+                // Move to next field
+                while (*pos && *pos != ':')
+                {
+                    pos++;
+                }
+                if (*pos == ':')
+                {
+                    pos++;
+                }
+                
+                PB_DEBUG("  Network %d: SSID='%s' RSSI=%d dBm", i + 1, ssid, rssi);
+                
+                // Store result
+                {
+                    std::lock_guard<std::mutex> lock(device->wifiScanMutex);
+                    strncpy(device->wifiScanResult.networks[i].ssid, ssid, PB_SSID_LEN - 1);
+                    device->wifiScanResult.networks[i].ssid[PB_SSID_LEN - 1] = '\0';
+                    device->wifiScanResult.networks[i].rssi = rssi;
+                    device->wifiScanResult.count = i + 1;
+                }
+            }
+        }
+        
+        // Signal that scan is complete
+        {
+            std::lock_guard<std::mutex> lock(device->wifiScanMutex);
+            device->wifiScanPending = false;
+        }
+        device->wifiScanCV.notify_one();
     }
 
     /* Background listener thread function for status messages */
@@ -510,100 +413,104 @@ namespace PowerBox
     {
         char buffer[256];
 
-        while(device->listenerRunning)
+        while(device->statusListenerRunning)
         {
             if (!device || !device->port)
             {
                 PB_DEBUG("StatusListener: Port unavailable, exiting");
-                device->listenerRunning = false;
+                device->statusListenerRunning = false;
                 return;
             }
 
             if (!device->port->IsOpen())
             {
                 PB_DEBUG("StatusListener: Port not open, exiting");
-                device->listenerRunning = false;
+                device->statusListenerRunning = false;
                 return;
             }
 
             if (device->port->Read((unsigned char *)buffer, 256, '#', 70000))
             {
                 /* Parse different message types based on prefix */
-                if (strstr(buffer, "UP:") == buffer)
+                if (strstr(buffer, "PINS:") == buffer)
                 {
-                    sscanf(buffer, "UP:%d#", &device->upTime);
+                    /* Handshake message */
+                    ParseHandshakeMessage(device, buffer);
+                }
+                else if (strstr(buffer, "UP:") == buffer)
+                {
+                    /* Uptime status */
+                    ParseUptimeMessage(device, buffer);
+                }
+                else if (strstr(buffer, "ENVMODEL:") == buffer)
+                {
+                    /* Environment model */
+                    ParseEnvModelMessage(device, buffer);
+                }
+                else if (strstr(buffer, "UDR:") == buffer)
+                {
+                    /* Update rate */
+                    ParseUpdateRateMessage(device, buffer);
+                }
+                else if (strstr(buffer, "POUTS:") == buffer)
+                {
+                    /* Power port config */
+                    ParsePowerOutputConfigMessage(device, buffer);
+                }
+                else if (strstr(buffer, "USBS:") == buffer)
+                {
+                    /* USB port config */
+                    ParseUSBConfigMessage(device, buffer);
+                }
+                else if (strstr(buffer, "DEWS:") == buffer)
+                {
+                    /* Dew port config */
+                    ParseDewConfigMessage(device, buffer);
+                }
+                else if (strstr(buffer, "ADJS:") == buffer)
+                {
+                    /* Adj port config */
+                    ParseAdjConfigMessage(device, buffer);
                 }
                 else if (strstr(buffer, "ENV:") == buffer)
                 {
-                    sscanf(buffer, "ENV:%f:%f:%f#", &device->temperature, &device->humidity, &device->dewPoint);
+                    /* Environment status */
+                    ParseEnvironmentMessage(device, buffer);
                 }
                 else if (strstr(buffer, "PSUP:") == buffer)
                 {
-                    int mV12, mA12, mV5;
-                    float mAh12, mWh12;
-                    sscanf(buffer, "PSUP:%d:%d:%d:%f:%f#", &mV12, &mA12, &mV5, &mAh12, &mWh12);
-                    device->supply12V = mV12 / 1000.0f;
-                    device->supply12A = mA12 / 1000.0f;
-                    device->supply5V = mV5 / 1000.0f;
-                    device->supply12Ah = mAh12 / 1000.0f;
-                    device->supply12Wh = mWh12 / 1000.0f;
+                    /* Power supply status */
+                    ParsePowerSupplyMessage(device, buffer);
                 }
                 else if (strstr(buffer, "POUT:") == buffer)
                 {
-                    int mA[6];
-                    sscanf(buffer, "POUT:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d#",
-                           &mA[0], &device->powerOvercurrent[0],
-                           &mA[1], &device->powerOvercurrent[1],
-                           &mA[2], &device->powerOvercurrent[2],
-                           &mA[3], &device->powerOvercurrent[3],
-                           &mA[4], &device->powerOvercurrent[4],
-                           &mA[5], &device->powerOvercurrent[5]);
-                    for (int i = 0; i < 6; ++i)
-                    {
-                        device->powerCurrent[i] = mA[i] / 1000.0f;
-                    }
+                    /* Power port status */
+                    ParsePowerOutputMessage(device, buffer);
                 }
                 else if (strstr(buffer, "USB:") == buffer)
                 {
-                    int usbV[6];
-                    int usbA[6];
-                    sscanf(buffer, "USB:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d#",
-                           &usbA[0], &usbV[0], &device->usbOvercurrent[0],
-                           &usbA[1], &usbV[1], &device->usbOvercurrent[1],
-                           &usbA[2], &usbV[2], &device->usbOvercurrent[2],
-                           &usbA[3], &usbV[3], &device->usbOvercurrent[3],
-                           &usbA[4], &usbV[4], &device->usbOvercurrent[4],
-                           &usbA[5], &usbV[5], &device->usbOvercurrent[5]);
-                    for (int i = 0; i < 6; ++i)
-                    {
-                        device->usbCurrent[i] = usbA[i] / 1000.0f;
-                        device->usbVoltage[i] = usbV[i] / 1000.0f;
-                    }
+                    /* USB port status */
+                    ParseUSBMessage(device, buffer);
                 }
                 else if (strstr(buffer, "DEW:") == buffer)
                 {
-                    int dewA[2];
-                    float probe[2];
-                    sscanf(buffer, "DEW:%d:%f:%d:%d:%d:%d:%f:%d:%d:%d#",
-                           &dewA[0], &device->dewProbe[0], &device->dewPWM[0], &device->dewState[0], &device->dewOvercurrent[0],
-                           &dewA[1], &device->dewProbe[1], &device->dewPWM[1], &device->dewState[1], &device->dewOvercurrent[1]);
-                    for (int i = 0; i < 2; ++i)
-                    {
-                        device->dewCurrent[i] = dewA[i] / 1000.0f;
-                    }
+                    /* Dew port status */
+                    ParseDewMessage(device, buffer);
                 }
                 else if (strstr(buffer, "ADJ:") == buffer)
                 {
-                    int adjA[2], Vadc, Vmin, Vmax, Vset;
-                    sscanf(buffer, "ADJ:%d:%d:%d:%d:%d:%d:%d:%d:%d#",
-                           &adjA[0], &Vset, &Vadc, &Vmin, &Vmax, &device->buckOvercurrent,
-                           &adjA[1], &device->pwmPWM, &device->pwmOvercurrent);
-                    device->buckCurrent = adjA[0] / 1000.0f;
-                    device->buckVoltage = Vadc / 1000.0f;
-                    device->buckVmin = Vmin / 1000.0f;
-                    device->buckVmax = Vmax / 1000.0f;
-                    device->buckVset = Vset / 1000.0f;
-                    device->pwmCurrent = adjA[1] / 1000.0f;
+                    /* Adj port status */
+                    ParseAdjMessage(device, buffer);
+                }
+                else if (strstr(buffer, "WIFI:") == buffer)
+                {
+                    /* Wifi status */
+                    ParseWiFiInfoMessage(device, buffer);
+                }
+                else if (strstr(buffer, "WSURV:") == buffer)
+                {
+                    /* Wifi survey */
+                    ParseWiFiSurveyMessage(device, buffer);
                 }
             }
         }
@@ -619,13 +526,13 @@ namespace PowerBox
         }
 
         /* Stop any existing listener by setting the flag */
-        device->listenerRunning = false;
+        device->statusListenerRunning = false;
 
         /* Small delay to let old thread exit if it's still running */
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
         /* Start new listener thread */
-        device->listenerRunning = true;
+        device->statusListenerRunning = true;
         std::thread listenerThread(StatusListenerThreadFunc, device);
         listenerThread.detach(); /* Detach immediately - let it run independently */
         PB_DEBUG("StartStatusListener: Listener thread started");
@@ -639,7 +546,7 @@ namespace PowerBox
         }
 
         /* Signal listener thread to stop */
-        device->listenerRunning = false;
+        device->statusListenerRunning = false;
         PB_DEBUG("StopStatusListener: Listener stop requested");
     }
 } /* namespace PowerBox */
