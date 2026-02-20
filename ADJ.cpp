@@ -49,7 +49,7 @@ namespace PowerBox
         delete this->dac_;
     }
 
-    uint8_t BuckPort::begin(uint8_t diag_pin, uint8_t pwr_pin, uint8_t sel_pin, uint8_t port)
+    uint8_t BuckPort::begin(uint8_t diag_pin, uint8_t pwr_pin, uint8_t sel_pin, uint8_t port, float target, uint8_t state)
     {
         this->bts_->begin(1200, diag_pin, pwr_pin, sel_pin, port);
         this->bts_->setMaxCurrent(3.0f);
@@ -57,19 +57,18 @@ namespace PowerBox
         this->bts_->setSampling(10, 1);
 
         this->dac_->begin();
-        
-        // Get DAC state
-        this->voltage_target_ = VMAX - ADJ_R1 / ADJ_R2 * this->dac_->getVoltage() * 1000;
 
+        this->voltage_supply_ = this->adc_->analogReadAverage(1, 5, 0) * (36e3 + 4.7e3) / 4.7e3;
+        
         // Set power accordingly
-        this->setVoltage_(this->voltage_target_);
+        this->setState(state, target);
 
         return true;
     }
     
     void BuckPort::setState(uint8_t state, float targetVoltage)
     {
-        this->setVoltage_(targetVoltage);
+        this->setVoltage_(targetVoltage * 1000);
         this->bts_->setState(state);
     }
     
@@ -94,7 +93,7 @@ namespace PowerBox
                 this->voltage_target_ = VMIN;
                 this->over_voltage_ = 1;
 
-                PB_ERROR("Target voltage %d is out of range", voltage);
+                PB_ERROR("Target voltage %d is out of range (%d - %d)", voltage, VMIN, this->voltage_max_);
 
                 return false;
             }

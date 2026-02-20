@@ -1044,11 +1044,11 @@ namespace PowerBox
         return true;
     }
 
-    bool PowerBoxDevice::SetBuckState(int state, int target)
+    bool PowerBoxDevice::SetBuckState(int state, float target)
     {
         // Send command
         char cmd[16];
-        snprintf(cmd, sizeof(cmd), ":SAS0%d%d#", state != 0, target);
+        snprintf(cmd, sizeof(cmd), ":SAS0%d%d#", state != 0, (int)(target * 1000));
 
         if (!this->SendCommand(cmd))
         {
@@ -1056,7 +1056,7 @@ namespace PowerBox
         }
 
         this->buckState = state != 0;
-        this->buckVset = target;
+        this->buckVset = (int)(target * 1000);
 
         return true;
     }

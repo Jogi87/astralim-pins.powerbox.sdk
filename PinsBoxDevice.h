@@ -102,7 +102,7 @@ namespace PowerBox
             virtual int GetDewPWMPower(int i) { return this->dewPWM[i]; }
 
             virtual int GetBuckState();
-            virtual bool SetBuckState(int state, int target);
+            virtual bool SetBuckState(int state, float target);
             virtual int GetBuckBootState() { return this->buckBootstrap; }
             virtual bool SetBuckBootState(int state);
             virtual float GetBuckSetVoltage() { return this->buckVset; }

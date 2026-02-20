@@ -97,7 +97,7 @@ namespace PowerBox
             virtual int GetDewPWMPower(int i) = 0;
 
             virtual int GetBuckState(void) = 0;
-            virtual bool SetBuckState(int state, int target) = 0;
+            virtual bool SetBuckState(int state, float target) = 0;
             virtual int GetBuckBootState(void) = 0;
             virtual bool SetBuckBootState(int state) = 0;
             virtual float GetBuckSetVoltage(void) = 0;
@@ -174,9 +174,9 @@ namespace PowerBox
         int dewOvercurrent[PB_MAX_DEW_PORTS] = {0};
         float buckCurrent = 0.0f;
         float buckVoltage = 0.0f;
-        float buckVmin = 0.0f;
-        float buckVmax = 0.0f;
-        float buckVset = 0.0f;
+        float buckVmin = 1.0f;
+        float buckVmax = 1.0f;
+        float buckVset = 1.0f;
         int buckBootstrap = 0;
         int buckState = 0;
         int buckOvercurrent = 0;

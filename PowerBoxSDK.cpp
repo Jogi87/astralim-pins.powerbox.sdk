@@ -642,7 +642,7 @@ PBAPI PB_ERROR_TYPE PBSetBuckPortConfig(int id, PB_BUCK_PORT_CONFIG *config)
 
     // State and power is set with a single call, need to combine
     int newState = (config->mask & MASK_PORT_ENABLE) ? (config->enabled != 0) : device->GetBuckState();
-    int newTarget = ((config->mask & MASK_PORT_VOLTAGE) ? config->targetVoltage : device->GetBuckSetVoltage()) * 1000.0f;
+    int newTarget = (config->mask & MASK_PORT_VOLTAGE) ? config->targetVoltage : device->GetBuckSetVoltage();
 
     if (config->mask & MASK_PORT_ENABLE || config->mask & MASK_PORT_VOLTAGE)
     {

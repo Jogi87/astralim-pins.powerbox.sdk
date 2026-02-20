@@ -184,8 +184,7 @@ namespace PowerBox
 
         // Initialize adjustable ports
         this->buck_ = new BuckPort(*this->gpio_, *this->adc_, "/dev/i2c-10", 0x60);
-        this->buck_->begin(ADJDEN_PIN, BUCK_PIN, DSEL_PIN, 0);
-        //this->buck_->setState(this->buckBootstrap); TODO store last voltage
+        this->buck_->begin(ADJDEN_PIN, BUCK_PIN, DSEL_PIN, 0, this->buckVset, this->buckBootstrap);
 
         this->pwm_ = new PWMPort(*this->gpio_, *this->adc_);
         this->pwm_->begin(ADJDEN_PIN, PWM_PIN, DSEL_PIN, 1, 60000);
@@ -288,6 +287,10 @@ namespace PowerBox
         }
 
         this->buckBootstrap = 0;
+        this->buckVset = 1.f;
+
+        this->temperatureOffset = 0.f;
+        this->humidityOffset = 0.f;
     }
 
     void PinsBoxDevice::StartStatusListener(void)
@@ -353,9 +356,6 @@ namespace PowerBox
         }
 
         // Fetch buck port config
-        this->buckVset = 1.f;
-        this->buckVmin = 1.f;
-        this->buckVmax = 12.f;//TODO
         this->GetBuckState();
 
         // Fetch pwm port config
@@ -514,7 +514,7 @@ namespace PowerBox
             for (int i = 0; i < PINSBOX_NUM_DEW_PORTS && i < (int)dewPorts.size(); i++) {
                 int idx = dewPorts[i].get("port", 0).asInt();
                 this->dewAuto[idx] = dewPorts[i].get("autoMode", 1).asInt();
-                this->dewThreshold[idx] = dewPorts[i].get("autoThreshold", 4.0).asFloat();
+                this->dewThreshold[idx] = dewPorts[i].get("autoThreshold", 4).asFloat();
             }
         }
 
@@ -522,7 +522,7 @@ namespace PowerBox
         if (root.isMember("buckPorts")) {
             Json::Value buckPorts = root["buckPorts"];
             this->buckBootstrap = buckPorts[0].get("bootState", 0).asInt();
-            this->buckVset = buckPorts[0].get("targetVoltage", 0).asFloat();
+            this->buckVset = buckPorts[0].get("targetVoltage", 1).asFloat();
         }
     }
 
@@ -810,13 +810,17 @@ namespace PowerBox
     {
         uint8_t state = this->buck_->getState();
         this->buckState = state;
+        this->buckVmin = this->buck_->getMinVoltage();
+        this->buckVmax = this->buck_->getMaxVoltage();
         return state;
     }
 
-    bool PinsBoxDevice::SetBuckState(int state, int target)
+    bool PinsBoxDevice::SetBuckState(int state, float target)
     {
         this->buck_->setState(state, target);
         this->buckState = state;
+	this->buckVset = target;
+	SaveSettings();
         return true;
     }
 

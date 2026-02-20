@@ -40,7 +40,7 @@ namespace PowerBox
             BuckPort(const GPIOManager& gpio, const MCP3204& mcp, const char* dev, uint8_t address);
             ~BuckPort(void);
 
-            uint8_t begin(uint8_t diag_pin, uint8_t pwr_pin, uint8_t sel_pin, uint8_t port);
+            uint8_t begin(uint8_t diag_pin, uint8_t pwr_pin, uint8_t sel_pin, uint8_t port, float target, uint8_t state);
 
             void enable(void) { this->bts_->enable(); }
             void disable(void) { this->bts_->disable(); }
