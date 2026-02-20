@@ -23,6 +23,7 @@
  * **************************************************************************** */
 
 #include "DHT22.h"
+#include "DS18B20.h"
 #include <fstream>
 
 namespace PowerBox
@@ -39,13 +40,13 @@ namespace PowerBox
     float DHT22::getTemperature(void) const
     {
         std::string val = this->read_(this->path_ + "/in_temp_input");
-        return val.empty() ? -127.f : std::stof(val) * 0.001f;
+        return val.empty() ? DEVICE_DISCONNECTED_C : std::stof(val) * 0.001f;
     }
 
     float DHT22::getHumidity(void) const
     {
         std::string val = this->read_(this->path_ + "/in_humidityrelative_input");
-        return val.empty() ? -127.f : std::stof(val) * 0.001f;
+        return val.empty() ? DEVICE_DISCONNECTED_C : std::stof(val) * 0.001f;
     }
 
     std::string DHT22::read_(const std::string& path) const

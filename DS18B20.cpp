@@ -37,19 +37,19 @@ namespace PowerBox
     {
         this->gpio_ = &gpio;
         this->pin_ = UINT8_MAX;
-        this->current_temperature_ = -127.f;
+        this->current_temperature_ = DEVICE_DISCONNECTED_C;
     }
 
     DS18B20::~DS18B20(void)
     {
         this->pin_ = UINT8_MAX;
-        this->current_temperature_ = -127.f;
+        this->current_temperature_ = DEVICE_DISCONNECTED_C;
     }
 
     bool DS18B20::begin(uint8_t pin)
     {
         this->pin_ = pin;
-        this->current_temperature_ = -127.f;
+        this->current_temperature_ = DEVICE_DISCONNECTED_C;
 
         return true;
     }
@@ -58,7 +58,7 @@ namespace PowerBox
     {
         if(!this->reset_())
         {
-            this->current_temperature_ = -127.f;
+            this->current_temperature_ = DEVICE_DISCONNECTED_C;
             return;
         }
 
@@ -68,7 +68,7 @@ namespace PowerBox
 
     float DS18B20::getTemperature(void)
     {
-        const float ERROR_TEMP = -127.f;
+        const float ERROR_TEMP = DEVICE_DISCONNECTED_C;
         uint8_t data[9];
 
         for(uint8_t retry = 0; retry < 5; ++retry)

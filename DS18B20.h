@@ -27,6 +27,8 @@
 
 #include "GPIOManager.h"
 
+#define DEVICE_DISCONNECTED_C -127.f
+
 namespace PowerBox
 {
     class DS18B20

@@ -536,16 +536,7 @@ PBAPI PB_ERROR_TYPE PBSetDewPortConfig(int id, PB_DEW_PORT_CONFIG *config)
     // State and power is set with a single call, need to combine
     int newState = (config->mask & MASK_PORT_ENABLE) ? (config->enabled != 0) : device->GetDewState(idx);
     int newPower = (config->mask & MASK_PORT_POWER) ? config->power : device->GetDewPWMPower(idx);
-
-    if (config->mask & MASK_PORT_ENABLE || config->mask & MASK_PORT_POWER)
-    {
-        if (!device->SetDewState(config->index, newState, newPower))
-        {
-            PB_ERROR("PBSetDewPortConfig: Failed to set dew state on port %d", config->index);
-            return PB_ERROR_COMMUNICATION;
-        }
-        PB_DEBUG("PBSetDewPortConfig: Port %d state=%d, power=%d", config->index, newState, newPower);
-    }
+    bool autoMode = false;
 
     if (config->mask & MASK_PORT_AUTO_DEW_MODE)
     {
@@ -554,7 +545,21 @@ PBAPI PB_ERROR_TYPE PBSetDewPortConfig(int id, PB_DEW_PORT_CONFIG *config)
             PB_ERROR("PBSetDewPortConfig: Failed to set auto mode on port %d", config->index);
             return PB_ERROR_COMMUNICATION;
         }
+        autoMode = config->autoMode != 0;
         PB_DEBUG("PBSetDewPortConfig: Port %d autoMode=%d", config->index, config->autoMode);
+    }
+
+    if ((config->mask & MASK_PORT_ENABLE || config->mask & MASK_PORT_POWER) && !autoMode)
+    {
+        // When turning off, also set power to 0
+        newPower = (newState == 0) ? 0 : newPower;
+
+        if (!device->SetDewState(config->index, newState, newPower))
+        {
+            PB_ERROR("PBSetDewPortConfig: Failed to set dew state on port %d", config->index);
+            return PB_ERROR_COMMUNICATION;
+        }
+        PB_DEBUG("PBSetDewPortConfig: Port %d state=%d, power=%d", config->index, newState, newPower);
     }
 
     if (config->mask & MASK_PORT_AUTO_DEW_THRESHOLD)
@@ -725,6 +730,9 @@ PBAPI PB_ERROR_TYPE PBSetPWMPortConfig(int id, PB_PWM_PORT_CONFIG *config)
 
     if (config->mask & MASK_PORT_ENABLE || config->mask & MASK_PORT_POWER)
     {
+        // When turning off, also set power to 0
+        newPower = (newState == 0) ? 0 : newPower;
+
         if (!device->SetPWMState(newState, newPower))
         {
             PB_ERROR("PBSetPWMPortConfig: Failed to set PWM state");

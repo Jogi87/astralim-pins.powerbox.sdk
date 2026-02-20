@@ -144,6 +144,8 @@ namespace PowerBox
         float humidity = -127.0f;
         float dewPoint = -127.0f;
         int extSensor = 0;
+        float extTemperature = -127.0f;
+        float extHumidity = -127.0f;
 
         // Supply status
         float supply12V = 0.0f;

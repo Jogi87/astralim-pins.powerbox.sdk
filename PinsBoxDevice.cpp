@@ -92,9 +92,9 @@ namespace PowerBox
     PinsBoxDevice::PinsBoxDevice(void)
     {
         this->statusListenerRunning = false;
-        this->temperature = -127.f;
-        this->humidity = -127.f;
-        this->dewPoint = -127.f;
+        this->temperature = DEVICE_DISCONNECTED_C;
+        this->humidity = DEVICE_DISCONNECTED_C;
+        this->dewPoint = DEVICE_DISCONNECTED_C;
         this->extSensor = false;
 
         // Initial reset
@@ -170,8 +170,8 @@ namespace PowerBox
         this->usb_[3]->begin(USB_PINS[3], 0x43, 2.0f, this->usbBootstrap[3]);
         this->usb_[5]->begin(USB_PINS[4], 0x44, 1.2f, this->usbBootstrap[4]);
         this->usb_[4]->begin(USB_PINS[5], 0x45, 1.2f, this->usbBootstrap[5]);
-        this->usb_[7]->begin(USB_PINS[6], 0x46, 1.2f, this->usbBootstrap[6]);
-        this->usb_[6]->begin(USB_PINS[7], 0x47, 1.2f, this->usbBootstrap[7]);
+        this->usb_[6]->begin(USB_PINS[7], 0x47, 1.2f, this->usbBootstrap[6]);
+        this->usb_[7]->begin(USB_PINS[6], 0x46, 1.2f, this->usbBootstrap[7]);
 
         // Dew ports
         this->dew_ = new DewPort*[PINSBOX_NUM_DEW_PORTS];
@@ -179,8 +179,8 @@ namespace PowerBox
         this->dew_[1] = new DewPort(*this->gpio_, *this->adc_, "pwmchip1", 0);
 
         // Initialize Dew ports
-        this->dew_[0]->begin(DEWDEN_PIN, DEW_PINS[1], DSEL_PIN, DS18_PINS[0], 1, 400);
-        this->dew_[1]->begin(DEWDEN_PIN, DEW_PINS[0], DSEL_PIN, DS18_PINS[1], 0, 400);
+        this->dew_[0]->begin(DEWDEN_PIN, DEW_PINS[1], DSEL_PIN, DS18_PINS[0], 1, 400, this->dewAuto[0]);
+        this->dew_[1]->begin(DEWDEN_PIN, DEW_PINS[0], DSEL_PIN, DS18_PINS[1], 0, 400, this->dewAuto[1]);
 
         // Initialize adjustable ports
         this->buck_ = new BuckPort(*this->gpio_, *this->adc_, "/dev/i2c-10", 0x60);
@@ -406,7 +406,7 @@ namespace PowerBox
 
     float PinsBoxDevice::GetCoreTemp(void)
     {
-        float temp = -127.f;
+        float temp = DEVICE_DISCONNECTED_C;
         std::ifstream ifs("/sys/class/thermal/thermal_zone0/temp");
 
         if (ifs)
@@ -445,7 +445,7 @@ namespace PowerBox
     {
         if(val > -50.f && val < 80.f)
         {
-            this->temperature = val;
+            this->extTemperature = val;
             this->extSensor = true;
             return true;
         }
@@ -463,7 +463,7 @@ namespace PowerBox
     {
         if(val > 0.0f && val <= 100.0f)
         {
-            this->humidity = val;
+            this->extHumidity = val;
             this->extSensor = true;
             return true;
         }
@@ -570,24 +570,35 @@ namespace PowerBox
 
     void PinsBoxDevice::GetDHT22Data(void)
     {
-        // TODO Extsensor
         float currentTemperature = this->dht_->getTemperature();
         float currentHumidity = this->dht_->getHumidity();
 
-        if(std::isnan(currentTemperature) || std::isnan(currentHumidity))
+        if(std::isnan(currentTemperature) ||
+           std::isnan(currentHumidity) ||
+           currentTemperature == DEVICE_DISCONNECTED_C ||
+           currentHumidity == DEVICE_DISCONNECTED_C)
         {
-            this->temperature = -127.f;
-            this->humidity = -127.f;
-            this->dewPoint = -127.f;
-            return;
-        }
+            if(std::isnan(this->extTemperature) ||
+               std::isnan(this->extHumidity) ||
+               this->extTemperature == DEVICE_DISCONNECTED_C ||
+               this->extHumidity == DEVICE_DISCONNECTED_C)
+            {
+                this->temperature = DEVICE_DISCONNECTED_C;
+                this->humidity = DEVICE_DISCONNECTED_C;
+                this->dewPoint = DEVICE_DISCONNECTED_C;
+                this->extSensor = false;
+                return;
+            }
 
-        if(currentTemperature == -127.f || currentHumidity == -127.f)
+            // If we have externally set values, use them
+            currentTemperature = this->extTemperature;
+            currentHumidity = this->extHumidity;
+            this->extSensor = true;
+        }
+        else
         {
-            this->temperature = -127.f;
-            this->humidity = -127.f;
-            this->dewPoint = -127.f;
-            return;
+            // We have valid environment data, disable external sensor
+            this->extSensor = false;
         }
 
         // Apply temperature offset (calibration correction)
@@ -604,8 +615,12 @@ namespace PowerBox
 
         this->temperature = currentTemperature;
         this->humidity = currentHumidity;
-        this->dewPoint = std::isnan(currentDewPoint) ? -127.f : currentDewPoint;
+        this->dewPoint = std::isnan(currentDewPoint) ? DEVICE_DISCONNECTED_C : currentDewPoint;
         this->dewPoint = std::min(this->dewPoint, currentTemperature);
+
+        // Reset external values
+        this->extTemperature = DEVICE_DISCONNECTED_C;
+        this->extHumidity = DEVICE_DISCONNECTED_C;
     }
 
     void PinsBoxDevice::GetMCP3208Data(void)
@@ -647,9 +662,12 @@ namespace PowerBox
         // Dew ports
         for(int i = 0; i < PINSBOX_NUM_DEW_PORTS; ++i)
         {
-            this->dew_[i]->measureCurrent();
+            this->dew_[i]->update(this->dewPoint, this->dewThreshold[i]);
             this->dewCurrent[i] = this->dew_[i]->getCurrent_mA() * 0.001f;
             this->dewOvercurrent[i] = this->dew_[i]->getOverCurrent() ? 1 : 0;
+            this->dewProbe[i] = std::round(this->dew_[i]->getTemperature() * 100.0f) / 100.0f;
+            this->dewPWM[i] = this->dew_[i]->getDutyCycle();
+            this->dewState[i] = this->dew_[i]->getState();
         }
 
         // Adjustable ports
@@ -666,11 +684,6 @@ namespace PowerBox
         this->pwm_->measureCurrent();
         this->pwmCurrent = this->pwm_->getCurrent_mA() * 0.001f;
         this->pwmOvercurrent = this->pwm_->getOverCurrent() ? 1 : 0;
-
-        for (int i = 0; i < PINSBOX_NUM_DEW_PORTS; i++) {
-            this->dewProbe[i] = std::round(this->dew_[i]->getTemperature() * 100.0f) / 100.0f;
-            this->dew_[i]->measureTemperature();
-        }
     }
 
     int PinsBoxDevice::GetPowerState(int i)
@@ -781,6 +794,7 @@ namespace PowerBox
     bool PinsBoxDevice::SetDewAutoMode(int i, int state)
     {
         this->dewAuto[i] = state;
+        this->dew_[i]->setAutoMode(state);
         SaveSettings();
         return true;
     }
@@ -796,7 +810,6 @@ namespace PowerBox
     {
         uint8_t state = this->buck_->getState();
         this->buckState = state;
-        // TODO??
         return state;
     }
 

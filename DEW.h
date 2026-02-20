@@ -40,18 +40,18 @@ namespace PowerBox
             DewPort(const GPIOManager& gpio, const MCP3204& mcp, const char* chip, int ch);
             ~DewPort(void);
 
-            uint8_t begin(uint8_t diag_pin, uint8_t pwr_pin, uint8_t sel_pin, uint8_t probe_pin, uint8_t port, unsigned int freq);
+            uint8_t begin(uint8_t diag_pin, uint8_t pwr_pin, uint8_t sel_pin, uint8_t probe_pin, uint8_t port, unsigned int freq, bool mode);
+            void update(float dewPoint, float threshold);
 
             void enable(void) { this->bts_->enable(); }
             void disable(void) { this->bts_->disable(); }
             void toggle(void) { this->bts_->toggle(); }
             void setState(uint8_t state, uint8_t dc);
-
-            void measureCurrent(void) { this->bts_->measureCurrent(); }
-            void measureTemperature(void) { this->probe_->measureTemperature(); }
+            void setAutoMode(uint8_t mode) { this->auto_mode_ = mode != 0; }
 
             uint16_t getCurrent_mA(void) const { return this->bts_->getCurrent_mA(); }
             uint8_t getState(void) const { return this->bts_->getState(); }
+            uint8_t getAutoMode(void) const { return this->auto_mode_; }
             uint8_t getDutyCycle(void) const;
             uint8_t getOverCurrent(void) const { return this->bts_->getOverCurrent(); }
             float getTemperature(void) const { return this->probe_->getTemperature(); }
@@ -59,6 +59,8 @@ namespace PowerBox
             void resetOverCurrent(void) { this->bts_->resetOverCurrent(); }
 
         private:
+            void setState_(uint8_t state, uint8_t dutyCycle);
+
             const GPIOManager* gpio_;
             const MCP3204* mcp_;
 
@@ -66,6 +68,7 @@ namespace PowerBox
             BTS7080<MCP3204>* bts_;
             PWM* pwm_;
 
+            bool auto_mode_;
     };
 } /* namespace PowerBox */
 

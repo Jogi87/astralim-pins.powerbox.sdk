@@ -31,6 +31,7 @@ namespace PowerBox
     {
         this->gpio_ = &gpio;
         this->mcp_ = &mcp;
+        this->auto_mode_ = false;
 
         this->probe_ = new DS18B20(gpio);
         this->bts_ = new BTS7080<MCP3204>(gpio, mcp);
@@ -51,9 +52,11 @@ namespace PowerBox
             delete this->pwm_;
             this->pwm_ = nullptr;
         }
+
+        this->auto_mode_ = false;
     }
 
-    uint8_t DewPort::begin(uint8_t diag_pin, uint8_t pwr_pin, uint8_t sel_pin, uint8_t probe_pin, uint8_t port, unsigned int freq)
+    uint8_t DewPort::begin(uint8_t diag_pin, uint8_t pwr_pin, uint8_t sel_pin, uint8_t probe_pin, uint8_t port, unsigned int freq, bool mode)
     {
         this->probe_->begin(probe_pin);
 
@@ -67,27 +70,58 @@ namespace PowerBox
         RETURN_IF_ERROR(this->pwm_->setDutyCycle(0));
         RETURN_IF_ERROR(this->pwm_->setState(0));
 
+        this->auto_mode_ = mode;
+
         return true;
+    }
+
+    void DewPort::update(float dewPoint, float threshold)
+    {
+        // Update heater power, if auto mode is enabled and probe is available
+        if(this->auto_mode_)
+        {
+            float temperature = this->probe_->getTemperature();
+
+            if(temperature == DEVICE_DISCONNECTED_C || dewPoint == DEVICE_DISCONNECTED_C)
+            {
+                // Turn off heater
+                this->setState_(0, 0);
+            }
+            else
+            {
+                // Temperture difference between current and dew point
+                // e.g. Threshold ; Temp  ;  DP   ;  diff
+                //              4      20      15     -1  ;  heater should be inactive
+                //              4      12      11      3  ;  heater should be active
+                float dT = std::max(threshold, 0.1f);
+                float diff = (dewPoint + dT) - temperature;
+
+                // Difference cannot exceed threshold or get negative
+                diff = std::min(dT, std::max(0.f, diff));
+
+                // Compute the required power duty cycle
+                // e.g. for threshold of 4:
+                // diff  -1 --> 0
+                // diff   3 --> 191
+                // diff 0.5 --> 32
+                // diff   4 --> 255
+                int dutyCycle = 255 * (diff / dT);
+
+                this->setState_(dutyCycle != 0, dutyCycle);
+            }
+        }
+
+        // Measure properties
+        this->probe_->measureTemperature();
+        this->bts_->measureCurrent();
     }
 
     void DewPort::setState(uint8_t state, uint8_t dc)
     {
-        // Convert duty cycle to nano seconds
-        unsigned int period = this->pwm_->getPeriod();
-        unsigned int dutyCycle = period * dc / 255;
-
-        // Set duty cycle
-        this->pwm_->setDutyCycle(dutyCycle);
-
-        if(dutyCycle == 0)
+        if(!this->auto_mode_)
         {
-            // Turn off
-            this->pwm_->setState(0);
-            this->bts_->setState(0);
+            this->setState_(state, state != 0 ? dc : 0);
         }
-
-        this->pwm_->setState(state);
-        this->bts_->setState(state);
     }
 
     uint8_t DewPort::getDutyCycle(void) const
@@ -101,5 +135,17 @@ namespace PowerBox
 
         // Convert nanoseconds back to 0-255 scale
         return (dutyCycle_ns * 255) / period;
+    }
+
+    void DewPort::setState_(uint8_t state, uint8_t dutyCycle)
+    {
+        // Convert duty cycle to nano seconds
+        unsigned int period = this->pwm_->getPeriod();
+        unsigned int dc = (period * dutyCycle) / 255;
+
+        // Set duty cycle
+        this->pwm_->setDutyCycle(dc);
+        this->pwm_->setState(dutyCycle != 0);
+        this->bts_->setState(state);
     }
 } /* namespace PowerBox */
