@@ -34,6 +34,7 @@
 #include "ADJ.h"
 #include "DEW.h"
 #include "DHT22.h"
+#include "PWM.h"
 #include <string>
 
 #define PINSBOX_NUM_POWER_PORTS 8
@@ -117,6 +118,7 @@ namespace PowerBox
             virtual std::string GetModelType() { return "Compute Model 5"; }
             virtual std::string GetUUID() { return this->GetFullSerial(); }
 
+            virtual PB_ERROR_TYPE Beep(int volume, int duration_ms);
             virtual PB_ERROR_TYPE FactoryReset(void)                                { return PB_SUCCESS; }
 
             virtual void StartStatusListener(void);
@@ -149,6 +151,7 @@ namespace PowerBox
             DewPort** dew_;
             BuckPort* buck_;
             PWMPort* pwm_;
+            PWM* buzzer_;
     };
 
 #ifdef HAVE_LIBGPIOD

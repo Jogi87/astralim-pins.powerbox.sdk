@@ -52,7 +52,8 @@ void PrintMenu()
     printf("18. WiFi Info\n");
     printf("19. WiFi Config (Get)\n");
     printf("20. WiFi Config (Set)\n");
-    printf("21. Exit\n");
+    printf("21. Buzzer test\n");
+    printf("22. Exit\n");
     printf("> ");
 }
 
@@ -1300,6 +1301,54 @@ int main(int argc, char *argv[])
             break;
 
         case 21:
+            if (!deviceOpened)
+            {
+                printf("Device not opened. Use option 9 to open it first.\n");
+            }
+            else
+            {
+                printf("\n=== Buzzer Test ===\n");
+                
+                printf("Enter volume (0-100): ");
+                int volume;
+                if (scanf("%d", &volume) != 1)
+                {
+                    printf("[FAIL] Invalid input\n");
+                    // Clear input buffer
+                    int c;
+                    while ((c = getchar()) != '\n' && c != EOF);
+                    break;
+                }
+                
+                printf("Enter duration in milliseconds: ");
+                int duration;
+                if (scanf("%d", &duration) != 1)
+                {
+                    printf("[FAIL] Invalid input\n");
+                    // Clear input buffer
+                    int c;
+                    while ((c = getchar()) != '\n' && c != EOF);
+                    break;
+                }
+                
+                // Clear input buffer
+                int c;
+                while ((c = getchar()) != '\n' && c != EOF);
+                
+                printf("Testing buzzer with volume=%d%%, duration=%dms...\n", volume, duration);
+                PB_ERROR_TYPE error = PBBeep(deviceId, volume, duration);
+                if (error == PB_SUCCESS)
+                {
+                    printf("[OK] Buzzer test completed successfully\n");
+                }
+                else
+                {
+                    printf("[FAIL] Buzzer test failed (Error: %d)\n", error);
+                }
+            }
+            break;
+
+        case 22:
             running = false;
             break;
 

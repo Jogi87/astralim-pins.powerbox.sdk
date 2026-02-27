@@ -1051,6 +1051,31 @@ PBAPI PB_ERROR_TYPE PBGetVersion(int id, PB_VERSION *version)
     return PB_SUCCESS;
 }
 
+PBAPI PB_ERROR_TYPE PBBeep(int id, int volume, int duration_ms)
+{
+    PB_DEBUG("PBBeep: Beeping with device id=%d", id);
+    std::lock_guard<std::mutex> lock(g_globalMutex);
+
+    auto it = g_devices.find(id);
+    if (it == g_devices.end())
+    {
+        PB_ERROR("PBBeep: Device id=%d not found", id);
+        return PB_ERROR_INVALID_ID;
+    }
+
+    auto device = it->second;
+    PB_ERROR_TYPE result = device->Beep(volume, duration_ms);
+    if (result == PB_SUCCESS)
+    {
+        PB_DEBUG("PBBeep: Device beep triggered");
+    }
+    else
+    {
+        PB_ERROR("PBBeep: Failed to beep device, error=%d", result);
+    }
+    return result;
+}
+
 PBAPI PB_ERROR_TYPE PBRestart(int id)
 {
     PB_DEBUG("PBRestart: Restarting device id=%d", id);

@@ -189,6 +189,10 @@ namespace PowerBox
         this->pwm_ = new PWMPort(*this->gpio_, *this->adc_);
         this->pwm_->begin(ADJDEN_PIN, PWM_PIN, DSEL_PIN, 1, 60000);
         this->pwm_->setState(0, 0.f);
+
+        // Initialize buzzer PWM on GPIO16 (pwmchip2, channel 0)
+        this->buzzer_ = new PWM("pwmchip2", 0);
+        this->buzzer_->setExport();
     }
 
     PinsBoxDevice::~PinsBoxDevice(void)
@@ -255,6 +259,12 @@ namespace PowerBox
             this->pwm_ = nullptr;
         }
 
+        // Clean up buzzer PWM
+        if(this->buzzer_) {
+            delete this->buzzer_;
+            this->buzzer_ = nullptr;
+        }
+
         // Clean up ADC
         if(this->adc_) {
             delete this->adc_;
@@ -319,6 +329,9 @@ namespace PowerBox
     void PinsBoxDevice::StatusListenerThreadFunc()
     {
         PB_DEBUG("StatusListener: starting");
+
+        // Beep on initial listener launch
+        //this->Beep(20, 400);
 
         while(this->statusListenerRunning)
         {
@@ -852,6 +865,50 @@ namespace PowerBox
 
 
 
+
+
+
+    PB_ERROR_TYPE PinsBoxDevice::Beep(int volume, int duration_ms)
+    {
+        if (!this->buzzer_ || duration_ms <= 0)
+        {
+            return PB_ERROR_INVALID_PARAMETER;
+        }
+
+        // Clamp volume to 0-100 range
+        volume = (volume < 0) ? 0 : (volume > 100) ? 100 : volume;
+
+        // If volume is 0, no beep
+        if (volume == 0)
+        {
+            return PB_SUCCESS;
+        }
+
+        // FUET-7525 sweet spot is 2700 Hz
+        const unsigned int BUZZER_FREQ_HZ = 2700;
+        const unsigned int PERIOD_NS = 1000000000 / BUZZER_FREQ_HZ;
+
+        // Set period if not already set
+        if (this->buzzer_->getPeriod() != PERIOD_NS)
+        {
+            this->buzzer_->setPeriod(PERIOD_NS);
+        }
+
+        // Calculate duty cycle based on volume (0-100%)
+        unsigned int duty_ns = (PERIOD_NS * volume) / 100;
+        this->buzzer_->setDutyCycle(duty_ns);
+
+        // Enable PWM
+        this->buzzer_->setState(true);
+
+        // Sleep for the specified duration
+        std::this_thread::sleep_for(std::chrono::milliseconds(duration_ms));
+
+        // Disable PWM
+        this->buzzer_->setState(false);
+
+        return PB_SUCCESS;
+    }
 
 
 

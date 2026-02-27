@@ -123,6 +123,7 @@ namespace PowerBox
             virtual std::string GetModelType(void) = 0;
             virtual std::string GetUUID(void) = 0;
 
+            virtual PB_ERROR_TYPE Beep(int volume, int duration_ms) { return PB_ERROR_NOT_AVAILABLE; }
             virtual PB_ERROR_TYPE Restart(void) { return PB_ERROR_NOT_AVAILABLE; }
             virtual PB_ERROR_TYPE FactoryReset(void) = 0;
 

@@ -294,6 +294,7 @@ extern "C"
     PBAPI PB_ERROR_TYPE PBGetVersion(int id, PB_VERSION *version);
 
     /* Utility */
+    PBAPI PB_ERROR_TYPE PBBeep(int id, int volume, int duration_ms);
     PBAPI PB_ERROR_TYPE PBRestart(int id);
     PBAPI PB_ERROR_TYPE PBFactoryReset(int id);
     PBAPI PB_ERROR_TYPE PBGetSDKVersion(char *version);
