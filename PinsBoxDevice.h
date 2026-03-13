@@ -153,7 +153,6 @@ namespace PowerBox
             BuckPort* buck_;
             PWMPort* pwm_;
             PWM* buzzer_;
-            
             std::thread statusListenerThread_;
     };
 

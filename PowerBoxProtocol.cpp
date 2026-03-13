@@ -429,7 +429,7 @@ namespace PowerBox
                 return;
             }
 
-            if (device->port->Read((unsigned char *)buffer, 256, '#', 70000))
+            if (device->port->Read((unsigned char *)buffer, 256, '#', 5000))
             {
                 /* Parse different message types based on prefix */
                 if (strstr(buffer, "PINS:") == buffer)
@@ -548,5 +548,11 @@ namespace PowerBox
         /* Signal listener thread to stop */
         device->statusListenerRunning = false;
         PB_DEBUG("StopStatusListener: Listener stop requested");
+        
+        /* Give the detached listener thread time to exit cleanly
+         * With a 5-second read timeout, thread will check flag within 5 seconds
+         * Adding extra buffer to ensure thread has time to clean up
+         */
+        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
     }
 } /* namespace PowerBox */

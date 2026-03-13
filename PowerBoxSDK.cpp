@@ -42,6 +42,11 @@ PBAPI PB_ERROR_TYPE PBScan(int *number, int *ids)
     }
     *number = ScanPinsBox(ids) ? 1 : 0;
     PB_DEBUG("PBScan: Found %d PinsBox device(s)", *number);
+    if (*number > 0)
+    {
+        PB_DEBUG("PBScan: PinsBox found, skipping PowerBox serial scan");
+        return PB_SUCCESS;
+    }
     PB_ERROR_TYPE result = ScanPowerBox(number, ids);
     PB_DEBUG("PBScan: Total devices found: %d", *number);
     return result;

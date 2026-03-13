@@ -307,9 +307,6 @@ namespace PowerBox
             this->statusListenerThread_.join();
         }
 
-        /* Small delay to let old thread exit completely */
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
-
         /* Start new listener thread */
         this->statusListenerRunning = true;
         this->statusListenerThread_ = std::thread(&PinsBoxDevice::StatusListenerThreadFunc, this);

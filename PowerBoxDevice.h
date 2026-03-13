@@ -30,6 +30,7 @@
 #include "Device.h"
 #include <condition_variable>
 #include <atomic>
+#include <thread>
 
 /* Handshake retry configuration */
 #define HANDSHAKE_MAX_RETRIES 5
@@ -46,6 +47,12 @@ namespace PowerBox
     {
         public:
             PowerBoxDevice(std::shared_ptr<SerialPort> port, std::string portName);
+            virtual ~PowerBoxDevice(void) {
+                statusListenerRunning = false;
+                if(statusListenerThread_.joinable()) {
+                    statusListenerThread_.join();
+                }
+            }
 
             virtual PB_ERROR_TYPE Open(void);
             virtual void Close(void);
@@ -214,6 +221,8 @@ namespace PowerBox
             std::atomic<bool> usbConfigPending{false};
             std::atomic<bool> dewConfigPending{false};
             std::atomic<bool> adjConfigPending{false};
+            std::atomic<bool> statusListenerRunning{false};
+            std::thread statusListenerThread_;
     };
 
     PB_ERROR_TYPE ScanPowerBox(int *number, int *ids);
