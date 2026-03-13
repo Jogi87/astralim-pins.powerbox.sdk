@@ -302,13 +302,17 @@ namespace PowerBox
         /* Stop any existing listener by setting the flag */
         this->statusListenerRunning = false;
 
-        /* Small delay to let old thread exit if it's still running */
+        /* Wait for old thread to exit if it's still running */
+        if(this->statusListenerThread_.joinable()) {
+            this->statusListenerThread_.join();
+        }
+
+        /* Small delay to let old thread exit completely */
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
         /* Start new listener thread */
         this->statusListenerRunning = true;
-        std::thread listenerThread(&PinsBoxDevice::StatusListenerThreadFunc, this);
-        listenerThread.detach(); /* Detach immediately - let it run independently */
+        this->statusListenerThread_ = std::thread(&PinsBoxDevice::StatusListenerThreadFunc, this);
         PB_DEBUG("StartStatusListener: Listener thread started");
     }
 
@@ -317,6 +321,12 @@ namespace PowerBox
         /* Signal listener thread to stop */
         this->statusListenerRunning = false;
         PB_DEBUG("StopStatusListener: Listener stop requested");
+        
+        /* Wait for the listener thread to actually exit */
+        if(this->statusListenerThread_.joinable()) {
+            this->statusListenerThread_.join();
+            PB_DEBUG("StopStatusListener: Listener thread joined");
+        }
     }
 
     /* Background listener thread function for status messages */

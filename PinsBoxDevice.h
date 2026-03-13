@@ -36,6 +36,7 @@
 #include "DHT22.h"
 #include "PWM.h"
 #include <string>
+#include <thread>
 
 #define PINSBOX_NUM_POWER_PORTS 8
 #define PINSBOX_NUM_USB_PORTS 8
@@ -152,6 +153,8 @@ namespace PowerBox
             BuckPort* buck_;
             PWMPort* pwm_;
             PWM* buzzer_;
+            
+            std::thread statusListenerThread_;
     };
 
 #ifdef HAVE_LIBGPIOD
