@@ -135,19 +135,13 @@ namespace PowerBox
 
         // Initialize PWR ports
         this->pwr_[0]->begin(1200, PWRDEN_PINS[0], 255, DSEL_PIN, 0);
-        this->pwr_[1]->begin(1200, PWRDEN_PINS[0], PWR_PINS[0], DSEL_PIN, 1);
-        this->pwr_[2]->begin(1200, PWRDEN_PINS[1], PWR_PINS[1], DSEL_PIN, 0);
-        this->pwr_[3]->begin(1200, PWRDEN_PINS[1], PWR_PINS[2], DSEL_PIN, 1);
-        this->pwr_[4]->begin(1200, PWRDEN_PINS[2], PWR_PINS[3], DSEL_PIN, 0);
-        this->pwr_[5]->begin(1200, PWRDEN_PINS[2], PWR_PINS[4], DSEL_PIN, 1);
-        this->pwr_[6]->begin(1200, PWRDEN_PINS[3], PWR_PINS[5], DSEL_PIN, 0);
-        this->pwr_[7]->begin(1200, PWRDEN_PINS[3], PWR_PINS[6], DSEL_PIN, 1);
-
-        // PWR boot state
-        for(int i = 1; i < PINSBOX_NUM_POWER_PORTS; ++i)
-        {
-            this->pwr_[i]->setState(this->powerBootstrap[i]);
-        }
+        this->pwr_[1]->begin(1200, PWRDEN_PINS[0], PWR_PINS[0], DSEL_PIN, 1, this->powerBootstrap[1]);
+        this->pwr_[2]->begin(1200, PWRDEN_PINS[1], PWR_PINS[1], DSEL_PIN, 0, this->powerBootstrap[2]);
+        this->pwr_[3]->begin(1200, PWRDEN_PINS[1], PWR_PINS[2], DSEL_PIN, 1, this->powerBootstrap[3]);
+        this->pwr_[4]->begin(1200, PWRDEN_PINS[2], PWR_PINS[3], DSEL_PIN, 0, this->powerBootstrap[4]);
+        this->pwr_[5]->begin(1200, PWRDEN_PINS[2], PWR_PINS[4], DSEL_PIN, 1, this->powerBootstrap[5]);
+        this->pwr_[6]->begin(1200, PWRDEN_PINS[3], PWR_PINS[5], DSEL_PIN, 0, this->powerBootstrap[6]);
+        this->pwr_[7]->begin(1200, PWRDEN_PINS[3], PWR_PINS[6], DSEL_PIN, 1, this->powerBootstrap[7]);
 
         // PWR sense sample rate and max current
         for(int i = 0; i < PINSBOX_NUM_POWER_PORTS; ++i)

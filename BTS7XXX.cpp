@@ -79,7 +79,7 @@ namespace PowerBox
     }
 
     template <typename MCP, uint16_t kILIS>
-    uint8_t BTS7XXX_<MCP, kILIS>::begin(uint32_t rsense, uint8_t diag_pin, uint8_t pwr_pin, uint8_t sel_pin, uint8_t port)
+    uint8_t BTS7XXX_<MCP, kILIS>::begin(uint32_t rsense, uint8_t diag_pin, uint8_t pwr_pin, uint8_t sel_pin, uint8_t port, uint8_t state)
     {
         this->pwr_pin_  = pwr_pin;
         this->diag_pin_ = diag_pin;
@@ -88,8 +88,8 @@ namespace PowerBox
         this->port_     = port;
 
         // Port starts in disabled state
-        this->gpio_->digitalWrite(this->pwr_pin_, LOW);
-        this->enabled_ = false;
+        this->gpio_->digitalWrite(this->pwr_pin_, state);
+        this->enabled_ = state;
 
         // Diagnosis is disabled
         this->gpio_->digitalWrite(this->diag_pin_, LOW);

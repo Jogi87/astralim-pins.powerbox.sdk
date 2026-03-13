@@ -38,7 +38,7 @@ namespace PowerBox
             BTS7XXX_(const GPIOManager& gpio, const MCP& mcp);
             ~BTS7XXX_(void);
 
-            uint8_t begin(uint32_t rsense, uint8_t diag_pin, uint8_t pwr_pin = UINT8_MAX, uint8_t sel_pin = UINT8_MAX, uint8_t port = 0);
+            uint8_t begin(uint32_t rsense, uint8_t diag_pin, uint8_t pwr_pin = UINT8_MAX, uint8_t sel_pin = UINT8_MAX, uint8_t port = 0, uint8_t state = 0);
             uint8_t isConnected(void) const { return this->init_; }
 
             void setChannel(uint8_t ch);

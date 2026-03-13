@@ -151,10 +151,6 @@ namespace PowerBox
         // Set output pins
         for(int i = 0; i < this->tca_ngpio_; ++i)
         {
-            if(!this->tca_->digitalWrite(this->tca_gpio_[i], LOW)) {
-                PB_DEBUG("GPIOManager::begin() - digitalWrite LOW failed");
-                return false;
-            }
             if(!this->tca_->pinMode(this->tca_gpio_[i], OUTPUT)) {
                 PB_DEBUG("GPIOManager::begin() - pinMode OUTPUT failed");
                 return false;
@@ -225,6 +221,7 @@ namespace PowerBox
 
         // Configure GPIO settings
         gpiod_line_settings_set_direction(this->settings_, GPIOD_LINE_DIRECTION_OUTPUT);
+        gpiod_line_settings_set_output_value(this->settings_, GPIOD_LINE_VALUE_ACTIVE);
 
         this->line_ = gpiod_line_config_new();
         if (!this->line_) {
