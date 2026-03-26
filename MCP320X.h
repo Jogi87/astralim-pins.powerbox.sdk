@@ -53,6 +53,7 @@ namespace PowerBox
             float v_ref_;
     };
 
+    using MCP3202 = MCP320X_<2, 12>;
     using MCP3204 = MCP320X_<4, 12>;
 } /* namespace PowerBox */
 
