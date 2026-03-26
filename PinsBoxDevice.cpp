@@ -43,7 +43,7 @@
 
 namespace PowerBox
 {
-    static constexpr unsigned int NUM_PINS = 30;
+    static constexpr unsigned int NUM_PINS = 29;
     static constexpr uint8_t PINS[NUM_PINS] = {
         22, // USB_EN1
         27, // USB_EN2
@@ -53,8 +53,7 @@ namespace PowerBox
         24, // USB_EN6
         26, // USB_EN7
         21, // USB_EN8
-        16, // SPEAKER
-        4,  // EN_BUCK
+         4, // EN_BUCK
         55, // port 2: P17
         54, // port 3: P16
         51, // port 4: P13
@@ -77,17 +76,17 @@ namespace PowerBox
          2, // DSEL
     };
 
-    static const uint8_t *PWR_PINS = &PINS[10];
+    static const uint8_t *PWR_PINS = &PINS[9];
     static const uint8_t *USB_PINS = &PINS[0];
-    static const uint8_t *DEW_PINS = &PINS[17];
-    static const uint8_t BUCK_PIN = PINS[9];
-    static const uint8_t PWM_PIN = PINS[19];
-    static const uint8_t DSEL_PIN = PINS[29];
-    static const uint8_t INDEN_PIN = PINS[24];
-    static const uint8_t *PWRDEN_PINS = &PINS[20];
-    static const uint8_t DEWDEN_PIN = PINS[25];
-    static const uint8_t ADJDEN_PIN = PINS[26];
-    static const uint8_t *DS18_PINS = &PINS[27];
+    static const uint8_t *DEW_PINS = &PINS[16];
+    static const uint8_t BUCK_PIN = PINS[8];
+    static const uint8_t PWM_PIN = PINS[18];
+    static const uint8_t DSEL_PIN = PINS[28];
+    static const uint8_t INDEN_PIN = PINS[23];
+    static const uint8_t *PWRDEN_PINS = &PINS[19];
+    static const uint8_t DEWDEN_PIN = PINS[24];
+    static const uint8_t ADJDEN_PIN = PINS[25];
+    static const uint8_t *DS18_PINS = &PINS[26];
 
     PinsBoxDevice::PinsBoxDevice(void)
     {
