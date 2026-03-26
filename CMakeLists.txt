@@ -76,9 +76,9 @@ find_package(OpenSSL REQUIRED)
 target_link_libraries(PowerBoxSDK PRIVATE OpenSSL::Crypto)
 
 # Find and link jsoncpp
-find_package(jsoncpp REQUIRED)
-target_include_directories(PowerBoxSDK PRIVATE /usr/include/jsoncpp)
-target_link_libraries(PowerBoxSDK PRIVATE jsoncpp)
+pkg_check_modules(JSONCPP REQUIRED jsoncpp)
+target_include_directories(PowerBoxSDK PRIVATE ${JSONCPP_INCLUDE_DIRS})
+target_link_libraries(PowerBoxSDK PRIVATE ${JSONCPP_LIBRARIES})
 
 # Link libudev
 if(UNIX)
