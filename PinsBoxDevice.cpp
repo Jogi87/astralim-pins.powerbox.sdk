@@ -331,7 +331,7 @@ namespace PowerBox
         PB_DEBUG("StatusListener: starting");
 
         // Beep on initial listener launch
-        //this->Beep(20, 400);
+        this->Beep(20, 400);
 
         while(this->statusListenerRunning)
         {
