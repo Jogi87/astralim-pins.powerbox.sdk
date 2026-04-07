@@ -35,8 +35,8 @@
 namespace PowerBox
 {
     /* Compile-time logging configuration */
-    static constexpr bool PB_DEBUG_ENABLED = true; /* Disable debug logging by default */
-    static constexpr bool PB_INFO_ENABLED = true;    /* Enable info logging */
+    static constexpr bool PB_DEBUG_ENABLED = false; /* Disable debug logging by default */
+    static constexpr bool PB_INFO_ENABLED = false;    /* Enable info logging */
     static constexpr bool PB_ERROR_ENABLED = true;    /* Enable error logging */
     static constexpr bool PB_TIMESTAMP_ENABLED = true; /* Enable timestamps in logs */
 
