@@ -41,14 +41,20 @@
 #include <unistd.h>
 #include <sys/ioctl.h>
 
+#define PINSBOX_NUM_POWER_PORTS 4
+#define PINSBOX_NUM_USB_PORTS 4
+#define PINSBOX_NUM_DEW_PORTS 0
+#define PINSBOX_NUM_BUCK_PORTS 0
+#define PINSBOX_NUM_PWM_PORTS 0
+
 namespace PowerBox
 {
     static constexpr unsigned int NUM_PINS = 8;
     static constexpr uint8_t PINS[NUM_PINS] = {
-        -1, // PWR0
-        -1, // PWR1
-        26, // PWR2
-        18, // PWR3
+        13, // PWR0
+        12, // PWR1
+        18, // PWR2
+        26, // PWR3
         16, // DEN12V_12
         24, // DEN12V_34
         23, // DEN12V_IN
@@ -71,8 +77,8 @@ namespace PowerBox
         this->LoadSettings();
 
         this->gpio_ = new GPIOManager("/dev/gpiochip0",
-                                      "/dev/i2c-10",
-                                      0x20,
+                                      nullptr,
+                                      -1,
                                       0,
                                       nullptr,
                                       NUM_PINS,
@@ -88,29 +94,37 @@ namespace PowerBox
         this->supply_ = new BTS7006<MCP3202>(*this->gpio_, *this->adc_);
         this->supply_->begin(1200, INDEN_PIN, 255, DSEL_PIN, 0);
         this->supply_->setMaxCurrent(12.f);
-        this->supply_->setChannel(1);
+        this->supply_->setChannel(0);
         this->supply_->setSampling(100, 50);
 
         // PWR ports
         this->pwr12_ = new BTS7012<MCP3202>*[2];
         this->pwr34_ = new BTS7080<MCP3202> *[2];
 
-        this->pwr12_[i] = new BTS7012<MCP3202>(*this->gpio_, *this->adc_);
-        this->pwr34_[i] = new BTS7080<MCP3202>(*this->gpio_, *this->adc_);
+        this->pwr12_[0] = new BTS7012<MCP3202>(*this->gpio_, *this->adc_);
+        this->pwr12_[1] = new BTS7012<MCP3202>(*this->gpio_, *this->adc_);
+        this->pwr34_[0] = new BTS7080<MCP3202>(*this->gpio_, *this->adc_);
+        this->pwr34_[1] = new BTS7080<MCP3202>(*this->gpio_, *this->adc_);
 
         // Initialize PWR ports
-        this->pwr_[0]->begin(1200, PWRDEN_PINS[0], PWR_PINS[0], DSEL_PIN, 0, this->powerBootstrap[0]);
-        this->pwr_[1]->begin(1200, PWRDEN_PINS[0], PWR_PINS[1], DSEL_PIN, 1, this->powerBootstrap[1]);
-        this->pwr_[2]->begin(1200, PWRDEN_PINS[1], PWR_PINS[2], DSEL_PIN, 0, this->powerBootstrap[2]);
-        this->pwr_[3]->begin(1200, PWRDEN_PINS[1], PWR_PINS[3], DSEL_PIN, 1, this->powerBootstrap[3]);
+        this->pwr12_[0]->begin(1200, PWRDEN_PINS[0], PWR_PINS[0], DSEL_PIN, 0, this->powerBootstrap[0]);
+        this->pwr12_[1]->begin(1200, PWRDEN_PINS[0], PWR_PINS[1], DSEL_PIN, 1, this->powerBootstrap[1]);
+        this->pwr34_[0]->begin(1200, PWRDEN_PINS[1], PWR_PINS[2], DSEL_PIN, 0, this->powerBootstrap[2]);
+        this->pwr34_[1]->begin(1200, PWRDEN_PINS[1], PWR_PINS[3], DSEL_PIN, 1, this->powerBootstrap[3]);
 
         // PWR sense sample rate and max current
-        for(int i = 0; i < PINSBOX_NUM_POWER_PORTS; ++i)
-        {
-            this->pwr_[i]->setMaxCurrent(3.f);
-            this->pwr_[i]->setChannel(0);
-            this->pwr_[i]->setSampling(10, 1);
-        }
+        this->pwr12_[0]->setMaxCurrent(6.f);
+        this->pwr12_[0]->setChannel(0);
+        this->pwr12_[0]->setSampling(10, 1);
+        this->pwr12_[1]->setMaxCurrent(6.f);
+        this->pwr12_[1]->setChannel(0);
+        this->pwr12_[1]->setSampling(10, 1);
+        this->pwr34_[0]->setMaxCurrent(3.f);
+        this->pwr34_[0]->setChannel(0);
+        this->pwr34_[0]->setSampling(10, 1);
+        this->pwr34_[1]->setMaxCurrent(3.f);
+        this->pwr34_[1]->setChannel(0);
+        this->pwr34_[1]->setSampling(10, 1);
     }
 
     PinsBoxLightDevice::~PinsBoxLightDevice(void)
@@ -234,6 +248,31 @@ namespace PowerBox
         PB_DEBUG("[OK] Device closed");
     }
 
+    int PinsBoxLightDevice::GetNumPowerPorts(void) const
+    {
+        return PINSBOX_NUM_POWER_PORTS;
+    }
+
+    int PinsBoxLightDevice::GetNumUSBPorts(void) const
+    {
+        return PINSBOX_NUM_USB_PORTS;
+    }
+
+    int PinsBoxLightDevice::GetNumDewPorts(void) const
+    {
+        return PINSBOX_NUM_DEW_PORTS;
+    }
+
+    int PinsBoxLightDevice::GetNumBuckPorts(void) const
+    {
+        return PINSBOX_NUM_BUCK_PORTS;
+    }
+
+    int PinsBoxLightDevice::GetNumPWMPorts(void) const
+    {
+        return PINSBOX_NUM_PWM_PORTS;
+    }
+
     std::string PinsBoxLightDevice::GetFullSerial(void)
     {
         std::ifstream file("/proc/device-tree/serial-number");
@@ -267,7 +306,7 @@ namespace PowerBox
 
     float PinsBoxLightDevice::GetCoreTemp(void)
     {
-        float temp = DEVICE_DISCONNECTED_C;
+        float temp = -127.f;
         std::ifstream ifs("/sys/class/thermal/thermal_zone0/temp");
 
         if (ifs)
@@ -359,9 +398,18 @@ namespace PowerBox
         // PWR ports
         for(int i = 0; i < PINSBOX_NUM_POWER_PORTS; ++i)
         {
-            this->pwr_[i]->measureCurrent();
-            this->powerCurrent[i] = this->pwr_[i]->getCurrent_mA() * 0.001f;
-            this->powerOvercurrent[i] = this->pwr_[i]->getOverCurrent() ? 1 : 0;
+            if(i < 2)
+            {
+                this->pwr12_[i]->measureCurrent();
+                this->powerCurrent[i] = this->pwr12_[i]->getCurrent_mA() * 0.001f;
+                this->powerOvercurrent[i] = this->pwr12_[i]->getOverCurrent() ? 1 : 0;
+            }
+            else
+            {
+                this->pwr34_[i - 2]->measureCurrent();
+                this->powerCurrent[i] = this->pwr34_[i - 2]->getCurrent_mA() * 0.001f;
+                this->powerOvercurrent[i] = this->pwr34_[i - 2]->getOverCurrent() ? 1 : 0;
+            }
         }
     }
 
@@ -376,7 +424,7 @@ namespace PowerBox
             return 0;
         }
 
-        uint8_t state = (i < 2) ? this->pwr12_[i]->getState() : this->pwr34_[i]->getState();
+        uint8_t state = (i < 2) ? this->pwr12_[i]->getState() : this->pwr34_[i - 2]->getState();
         this->powerState[i] = state;
         return state;
     }
@@ -397,7 +445,7 @@ namespace PowerBox
             this->pwr12_[i]->setState(state);
         }
         else{
-            this->pwr34_[i]->setState(state);
+            this->pwr34_[i - 2]->setState(state);
         }
         this->powerState[i] = state;
         return true;
@@ -424,7 +472,7 @@ namespace PowerBox
         return model.find("Raspberry Pi") != std::string::npos;
     }
 
-    bool ScanPinsBox(int *ids)
+    bool ScanPinsBoxLight(int *ids)
     {
         // Check if this is a Raspberry PI
         if(!ids || !IsRPI() || !std::filesystem::exists("/etc/pinsLightDevice"))

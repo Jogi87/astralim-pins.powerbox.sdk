@@ -28,6 +28,7 @@
 #include "PowerBoxLogging.h"
 #include "PowerBoxDevice.h"
 #include "PinsBoxDevice.h"
+#include "PinsBoxLightDevice.h"
 #include <cstring>
 
 using namespace PowerBox;
@@ -45,6 +46,13 @@ PBAPI PB_ERROR_TYPE PBScan(int *number, int *ids)
     if (*number > 0)
     {
         PB_DEBUG("PBScan: PinsBox found, skipping PowerBox serial scan");
+        return PB_SUCCESS;
+    }
+    *number = ScanPinsBoxLight(ids) ? 1 : 0;
+    PB_DEBUG("PBScan: Found %d PinsBoxLight device(s)", *number);
+    if (*number > 0)
+    {
+        PB_DEBUG("PBScan: PinsBoxLight found, skipping PowerBox serial scan");
         return PB_SUCCESS;
     }
     PB_ERROR_TYPE result = ScanPowerBox(number, ids);

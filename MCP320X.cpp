@@ -112,5 +112,6 @@ namespace PowerBox
         return adc;
     }
 
+    template class MCP320X_<2, 12>;
     template class MCP320X_<4, 12>;
 } /* namespace PowerBox */

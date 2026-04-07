@@ -286,6 +286,9 @@ namespace PowerBox
         }
     }
 
+    template class BTS7XXX_<MCP3202, 17700>;
+    template class BTS7XXX_<MCP3202, 4785>;
+    template class BTS7XXX_<MCP3202, 1800>;
     template class BTS7XXX_<MCP3204, 17700>;
     template class BTS7XXX_<MCP3204, 4785>;
     template class BTS7XXX_<MCP3204, 1800>;

@@ -39,7 +39,14 @@ namespace PowerBox
         this->line_ = nullptr;
         this->chip_ = nullptr;
 
-        this->tca_ = new TCA9535(i2c, addr);
+        if(addr != -1 && i2c != nullptr)
+        {
+            this->tca_ = new TCA9535(i2c, addr);
+        }
+        else
+        {
+            this->tca_ = nullptr;
+        }
 
         // Count and allocate GPIO arrays
         this->cm5_ngpio_ = 0;
@@ -141,9 +148,12 @@ namespace PowerBox
         PB_DEBUG("GPIOManager::begin() - InitGpiod_ succeeded, calling tca_->begin()");
 
         // Initialize TCA9535
-        if(!this->tca_->begin()) {
-            PB_DEBUG("GPIOManager::begin() - tca_->begin() failed");
-            return false;
+        if(this->tca_ != nullptr)
+        {
+            if(!this->tca_->begin()) {
+                PB_DEBUG("GPIOManager::begin() - tca_->begin() failed");
+                return false;
+            }
         }
 
         PB_DEBUG("GPIOManager::begin() - tca_->begin() succeeded");
@@ -207,7 +217,7 @@ namespace PowerBox
         this->chip_ = gpiod_chip_open(this->gpiochip_);
         if (!this->chip_)
         {
-            PB_DEBUG("GPIOManager::InitGpiod_ - gpiod_chip_open failed");
+            PB_ERROR("GPIOManager::InitGpiod_ - gpiod_chip_open failed for %s", this->gpiochip_);
             return false;
         }
 
@@ -261,7 +271,7 @@ namespace PowerBox
         // Request GPIO lines if there are any
         this->request_ = gpiod_chip_request_lines(this->chip_, this->req_, this->line_);
         if (!this->request_) {
-            PB_DEBUG("GPIOManager::InitGpiod_ - gpiod_chip_request_lines failed");
+            PB_ERROR("GPIOManager::InitGpiod_ - gpiod_chip_request_lines failed for %s (lines may be claimed by another process)", this->gpiochip_);
             gpiod_request_config_free(this->req_);
             this->req_ = nullptr;
             gpiod_line_config_free(this->line_);

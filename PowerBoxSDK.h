@@ -148,6 +148,7 @@ extern "C"
 
     typedef struct _PB_BUCK_PORT_STATUS
     {
+        int numPorts;                                /* Number of ports */
         float current;                               /* Current draw [A] */
         float voltage;                               /* Output voltage [V] */
         int overcurrent;                             /* Overcurrent flag */
@@ -158,6 +159,7 @@ extern "C"
 
     typedef struct _PB_PWM_PORT_STATUS
     {
+        int numPorts;                                /* Number of ports */
         int pwmResolution;                           /* PWM resolution (bit depth) */
         float current;                               /* Current draw [A] */
         int overcurrent;                             /* Overcurrent flag */
@@ -228,6 +230,7 @@ extern "C"
     typedef struct _PB_BUCK_PORT_CONFIG
     {
         unsigned int mask;          /* Which fields to update */
+        unsigned int index;         /* Which port to update */
         float targetVoltage;        /* Target voltage [V] */
         int enabled;                /* Enable/disable the buck converter */
         int bootState;              /* Buck converter state on boot */
@@ -237,6 +240,7 @@ extern "C"
     typedef struct _PB_PWM_PORT_CONFIG
     {
         unsigned int mask;          /* Which fields to update */
+        unsigned int index;         /* Which port to update */
         int enabled;                /* Enable/disable the PWM port */
         int power;                  /* PWM value (0 to 2^pwmResolution-1, see PB_PWM_PORT_STATUS) */
         int overcurrentReset;   /* Reset overcurrent flag */

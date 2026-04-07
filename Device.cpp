@@ -73,6 +73,7 @@ namespace PowerBox
 
     PB_ERROR_TYPE Device::GetBuckPortStatus(PB_BUCK_PORT_STATUS *status) const
     {
+        status->numPorts = this->GetNumBuckPorts();
         status->current = this->buckCurrent;
         status->voltage = this->buckVoltage;
         status->overcurrent = this->buckOvercurrent;
@@ -85,6 +86,7 @@ namespace PowerBox
 
     PB_ERROR_TYPE Device::GetPWMPortStatus(PB_PWM_PORT_STATUS *status) const
     {
+        status->numPorts = this->GetNumPWMPorts();
         status->pwmResolution = this->pwmPwmResolution;
         status->current = this->pwmCurrent;
         status->overcurrent = this->pwmOvercurrent;

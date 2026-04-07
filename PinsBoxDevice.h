@@ -38,10 +38,6 @@
 #include <string>
 #include <thread>
 
-#define PINSBOX_NUM_POWER_PORTS 8
-#define PINSBOX_NUM_USB_PORTS 8
-#define PINSBOX_NUM_DEW_PORTS 2
-
 namespace PowerBox
 {
     class PinsBoxDevice : public Device
@@ -80,9 +76,11 @@ namespace PowerBox
             virtual int GetUpdateRate() { return 1; }
             virtual bool SetUpdateRate(int val) { return true; }
 
-            virtual int GetNumPowerPorts(void) const { return PINSBOX_NUM_POWER_PORTS; }
-            virtual int GetNumUSBPorts(void) const { return PINSBOX_NUM_USB_PORTS; }
-            virtual int GetNumDewPorts(void) const { return PINSBOX_NUM_DEW_PORTS; }
+            virtual int GetNumPowerPorts(void) const;
+            virtual int GetNumUSBPorts(void) const;
+            virtual int GetNumDewPorts(void) const;
+            virtual int GetNumBuckPorts(void) const;
+            virtual int GetNumPWMPorts(void) const;
 
             virtual int GetPowerState(int i);
             virtual bool SetPowerState(int i, int state);

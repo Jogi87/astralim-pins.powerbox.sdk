@@ -74,6 +74,8 @@ namespace PowerBox
             virtual int GetNumPowerPorts(void) const = 0;
             virtual int GetNumUSBPorts(void) const = 0;
             virtual int GetNumDewPorts(void) const = 0;
+            virtual int GetNumBuckPorts(void) const = 0;
+            virtual int GetNumPWMPorts(void) const = 0;
 
             virtual int GetPowerState(int i) = 0;
             virtual bool SetPowerState(int i, int state) = 0;

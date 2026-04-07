@@ -40,6 +40,8 @@
 #define POWERBOX_NUM_POWER_PORTS 6
 #define POWERBOX_NUM_USB_PORTS 6
 #define POWERBOX_NUM_DEW_PORTS 2
+#define POWERBOX_NUM_BUCK_PORTS 1
+#define POWERBOX_NUM_PWM_PORTS 1
 
 namespace PowerBox
 {
@@ -86,6 +88,8 @@ namespace PowerBox
             virtual int GetNumPowerPorts(void) const { return POWERBOX_NUM_POWER_PORTS; }
             virtual int GetNumUSBPorts(void) const { return POWERBOX_NUM_USB_PORTS; }
             virtual int GetNumDewPorts(void) const { return POWERBOX_NUM_DEW_PORTS; }
+            virtual int GetNumBuckPorts(void) const { return POWERBOX_NUM_BUCK_PORTS; }
+            virtual int GetNumPWMPorts(void) const { return POWERBOX_NUM_PWM_PORTS; }
 
             virtual int GetPowerState(int i) { return this->powerState[i]; }
             virtual bool SetPowerState(int i, int state);

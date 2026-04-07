@@ -41,6 +41,12 @@
 #include <unistd.h>
 #include <sys/ioctl.h>
 
+#define PINSBOX_NUM_POWER_PORTS 8
+#define PINSBOX_NUM_USB_PORTS 8
+#define PINSBOX_NUM_DEW_PORTS 2
+#define PINSBOX_NUM_BUCK_PORTS 1
+#define PINSBOX_NUM_PWM_PORTS 1
+
 namespace PowerBox
 {
     static constexpr unsigned int NUM_PINS = 29;
@@ -697,6 +703,31 @@ namespace PowerBox
         this->pwm_->measureCurrent();
         this->pwmCurrent = this->pwm_->getCurrent_mA() * 0.001f;
         this->pwmOvercurrent = this->pwm_->getOverCurrent() ? 1 : 0;
+    }
+
+    int PinsBoxDevice::GetNumPowerPorts(void) const
+    {
+        return PINSBOX_NUM_POWER_PORTS;
+    }
+
+    int PinsBoxDevice::GetNumUSBPorts(void) const
+    {
+        return PINSBOX_NUM_USB_PORTS;
+    }
+
+    int PinsBoxDevice::GetNumDewPorts(void) const
+    {
+        return PINSBOX_NUM_DEW_PORTS;
+    }
+
+    int PinsBoxDevice::GetNumBuckPorts(void) const
+    {
+        return PINSBOX_NUM_BUCK_PORTS;
+    }
+
+    int PinsBoxDevice::GetNumPWMPorts(void) const
+    {
+        return PINSBOX_NUM_PWM_PORTS;
     }
 
     int PinsBoxDevice::GetPowerState(int i)

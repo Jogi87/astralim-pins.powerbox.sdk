@@ -31,8 +31,7 @@
 #include "MCP320X.h"
 #include <string>
 #include <thread>
-
-#define PINSBOX_NUM_POWER_PORTS 4
+#include <limits>
 
 namespace PowerBox
 {
@@ -49,23 +48,65 @@ namespace PowerBox
 
             virtual int GetUpTime(void);
             virtual float GetCoreTemp(void);
+            virtual float GetTemperature(void) { return -127.f;}
+            virtual float GetHumidity(void) {return -127.f;}
+            virtual float GetDewPoint(void){return -127.f;}
+            virtual int GetExtSensor(void) {return 0; }
 
             virtual float GetSupply12V(void)  { return this->supply12V; }
+            virtual float GetSupply5V(void) { return std::numeric_limits<float>::quiet_NaN(); }
             virtual float GetSupply12A(void) { return this->supply12A; }
             virtual float GetSupply12Ah(void) { return this->supply12Ah; }
             virtual float GetSupply12Wh(void) { return this->supply12Wh; }
             virtual float GetSupply12AverageA(void);
 
+            virtual float GetTemperatureOffset() {return 0.f;}
+            virtual bool SetTemperatureOffset(float val) { return true; }
+            virtual bool SetExtTemperature(float val) { return true; }
+            virtual float GetHumidityOffset() { return 0.f; }
+            virtual bool SetHumidityOffset(float val) { return true; }
+            virtual bool SetExtHumidity(float val) { return true; }
+            virtual int GetEnvUpdateRate() { return 1; }
+            virtual bool SetEnvUpdateRate(int val) { return true; }
             virtual int GetUpdateRate() { return 1; }
             virtual bool SetUpdateRate(int val) { return true; }
 
-            virtual int GetNumPowerPorts(void) const { return PINSBOX_NUM_POWER_PORTS; }
+            virtual int GetNumPowerPorts(void) const;
+            virtual int GetNumUSBPorts(void) const;
+            virtual int GetNumDewPorts(void) const;
+            virtual int GetNumBuckPorts(void) const;
+            virtual int GetNumPWMPorts(void) const;
 
             virtual int GetPowerState(int i);
             virtual bool SetPowerState(int i, int state);
             virtual bool ResetPowerOvercurrent(int i)                               { return false; }
             virtual int GetPowerBootState(int i) { return powerBootstrap[i]; }
             virtual bool SetPowerBootState(int i, int state);
+            virtual int GetUSBState(int i) { return 1; }
+            virtual bool SetUSBState(int i, int state) { return true; }
+            virtual bool ResetUSBOvercurrent(int i)                               { return false; }
+            virtual int GetUSBBootState(int i) { return 1; }
+            virtual bool SetUSBBootState(int i, int state) { return true; }
+            virtual int GetDewState(int i) { return 0; }
+            virtual bool SetDewState(int i, int state, int power) { return true; }
+            virtual int GetDewAutoMode(int i) { return 0; }
+            virtual bool SetDewAutoMode(int i, int state) { return true; }
+            virtual float GetDewAutoThreshold(int i) { return std::numeric_limits<float>::quiet_NaN(); }
+            virtual bool SetDewAutoThreshold(int i, float val) { return true; }
+            virtual bool ResetDewOvercurrent(int i)                               { return false; }
+            virtual int GetDewPWMPower(int i) { return 0; }
+
+            virtual int GetBuckState() { return 0; }
+            virtual bool SetBuckState(int state, float target) { return true; }
+            virtual int GetBuckBootState() { return 0; }
+            virtual bool SetBuckBootState(int state) { return true; }
+            virtual float GetBuckSetVoltage() { return 0; }
+            virtual bool ResetBuckOvercurrent(void)                                { return false; }
+
+            virtual int GetPWMState(void) { return 0; }
+            virtual bool SetPWMState(int state, int power) { return true; }
+            virtual bool GetPWMPower(void) { return 0; }
+            virtual bool ResetPWMOvercurrent(void)                                { return false; }
 
             virtual int GetFirmwareVersion() { return 1; }
             virtual std::string GetModelType() { return "Raspberry Pi"; }
@@ -97,10 +138,10 @@ namespace PowerBox
     };
 
 #ifdef HAVE_LIBGPIOD
-    bool ScanPinsBox(int *ids);
+    bool ScanPinsBoxLight(int *ids);
 #else
     /* Stub when libgpiod / PinsBox support is not available */
-    inline bool ScanPinsBox(int *ids) { (void)ids; return false; }
+    inline bool ScanPinsBoxLight(int *ids) { (void)ids; return false; }
 #endif
 
 } /* namespace PowerBox */
