@@ -35,7 +35,7 @@ namespace PowerBox
         {
             status->current[i] = this->powerCurrent[i];
             status->overcurrent[i] = this->powerOvercurrent[i];
-            status->readOnly[i] = this->usbReadOnly[i];
+            status->readOnly[i] = this->powerReadOnly[i];
         }
 
         return PB_SUCCESS;
