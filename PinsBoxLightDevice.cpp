@@ -51,10 +51,10 @@ namespace PowerBox
 {
     static constexpr unsigned int NUM_PINS = 8;
     static constexpr uint8_t PINS[NUM_PINS] = {
-        13, // PWR0
-        12, // PWR1
-        18, // PWR2
-        26, // PWR3
+        12, // PWR0
+        13, // PWR1
+        26, // PWR2
+        18, // PWR3
         16, // DEN12V_12
         24, // DEN12V_34
         23, // DEN12V_IN
@@ -99,7 +99,7 @@ namespace PowerBox
 
         // PWR ports
         this->pwr12_ = new BTS7012<MCP3202>*[2];
-        this->pwr34_ = new BTS7080<MCP3202> *[2];
+        this->pwr34_ = new BTS7080<MCP3202>*[2];
 
         this->pwr12_[0] = new BTS7012<MCP3202>(*this->gpio_, *this->adc_);
         this->pwr12_[1] = new BTS7012<MCP3202>(*this->gpio_, *this->adc_);
@@ -107,10 +107,10 @@ namespace PowerBox
         this->pwr34_[1] = new BTS7080<MCP3202>(*this->gpio_, *this->adc_);
 
         // Initialize PWR ports
-        this->pwr12_[0]->begin(1200, PWRDEN_PINS[0], PWR_PINS[0], DSEL_PIN, 0, this->powerBootstrap[0]);
-        this->pwr12_[1]->begin(1200, PWRDEN_PINS[0], PWR_PINS[1], DSEL_PIN, 1, this->powerBootstrap[1]);
-        this->pwr34_[0]->begin(1200, PWRDEN_PINS[1], PWR_PINS[2], DSEL_PIN, 0, this->powerBootstrap[2]);
-        this->pwr34_[1]->begin(1200, PWRDEN_PINS[1], PWR_PINS[3], DSEL_PIN, 1, this->powerBootstrap[3]);
+        this->pwr12_[0]->begin(1200, PWRDEN_PINS[0], PWR_PINS[0], DSEL_PIN, 1, this->powerBootstrap[0]);
+        this->pwr12_[1]->begin(1200, PWRDEN_PINS[0], PWR_PINS[1], DSEL_PIN, 0, this->powerBootstrap[1]);
+        this->pwr34_[0]->begin(1200, PWRDEN_PINS[1], PWR_PINS[2], DSEL_PIN, 1, this->powerBootstrap[2]);
+        this->pwr34_[1]->begin(1200, PWRDEN_PINS[1], PWR_PINS[3], DSEL_PIN, 0, this->powerBootstrap[3]);
 
         // PWR sense sample rate and max current
         this->pwr12_[0]->setMaxCurrent(6.f);
@@ -126,9 +126,13 @@ namespace PowerBox
         this->pwr34_[1]->setChannel(0);
         this->pwr34_[1]->setSampling(10, 1);
 
+        // All power ports are controllable
+        for (int i = 0; i < this->GetNumPowerPorts(); ++i) {
+            this->powerReadOnly[i] = false;
+        }
+
         // All USB ports are readonly
-        for (int i = 0; i < this->GetNumUSBPorts(); ++i)
-        {
+        for (int i = 0; i < this->GetNumUSBPorts(); ++i) {
             this->usbReadOnly[i] = true;
         }
     }
@@ -362,10 +366,13 @@ namespace PowerBox
         // Load power port bootstrap states
         if (root.isMember("powerPorts")) {
             Json::Value powerPorts = root["powerPorts"];
-            this->powerBootstrap[0] = true;
-            for (int i = 1; i < PINSBOX_NUM_POWER_PORTS && i < (int)powerPorts.size(); i++) {
-                int idx = powerPorts[i].get("port", 0).asInt();
-                this->powerBootstrap[idx] = powerPorts[i].get("bootState", 0).asInt();
+            for (int i = 0; i < PINSBOX_NUM_POWER_PORTS && i < (int)powerPorts.size(); i++) {
+                if (this->powerReadOnly[i] == true) {
+                    this->powerBootstrap[i] = true;
+                } else {
+                    int idx = powerPorts[i].get("port", 0).asInt();
+                    this->powerBootstrap[idx] = powerPorts[i].get("bootState", 0).asInt();
+                }
             }
         }
     }
@@ -375,9 +382,7 @@ namespace PowerBox
         Json::Value root;
         
         // Power port bootstrap states
-        root["powerPorts"][0]["port"] = 0;
-        root["powerPorts"][0]["bootState"] = 1;
-        for (int i = 1; i < PINSBOX_NUM_POWER_PORTS; i++) {
+        for (int i = 0; i < PINSBOX_NUM_POWER_PORTS; i++) {
             root["powerPorts"][i]["port"] = i;
             root["powerPorts"][i]["bootState"] = this->powerBootstrap[i];
         }
@@ -427,12 +432,12 @@ namespace PowerBox
 
     int PinsBoxLightDevice::GetPowerState(int i)
     {
-        // Port 0 is always on
-        if (i == 0) {
+        // Read only port is always on
+        if (this->powerReadOnly[i] == true) {
             return 1;
         }
 
-        if (i < 1 || i >= PINSBOX_NUM_POWER_PORTS) {
+        if (i < 0 || i >= PINSBOX_NUM_POWER_PORTS) {
             return 0;
         }
 
@@ -443,12 +448,12 @@ namespace PowerBox
 
     bool PinsBoxLightDevice::SetPowerState(int i, int state)
     {
-        // Port 0 is always on
-        if (i == 0) {
+        // Port is read only
+        if (this->powerReadOnly[i] == true) {
             return false;
         }
 
-        if (i < 1 || i >= PINSBOX_NUM_POWER_PORTS) {
+        if (i < 0 || i >= PINSBOX_NUM_POWER_PORTS) {
             return false;
         }
 

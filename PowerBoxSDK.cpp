@@ -349,9 +349,9 @@ PBAPI PB_ERROR_TYPE PBSetPowerPortConfig(int id, PB_POWER_PORT_CONFIG *config)
     auto device = it->second;
     auto idx = config->index;
 
-    if(idx == 0 || idx >= device->GetNumPowerPorts())
+    if(idx >= device->GetNumPowerPorts())
     {
-        PB_ERROR("PBSetPowerPortConfig: Port %d invalid (port 0 not configurable or out of range)", idx);
+        PB_ERROR("PBSetPowerPortConfig: Port %d invalid", idx);
         return PB_ERROR_INVALID_PARAMETER;
     }
 

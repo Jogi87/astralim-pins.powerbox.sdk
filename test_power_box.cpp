@@ -126,16 +126,17 @@ void DisplayPortStatus(int deviceId)
             PB_ERROR_TYPE cfgResult = PBGetPowerPortConfig(deviceId, &config);
             
             const char *overcurrent = powerPorts.overcurrent[i] ? "[OVERCURRENT]" : "OK";
+            const char *readOnly = powerPorts.readOnly[i] ? "[READONLY]" : "";
             if (cfgResult == PB_SUCCESS)
             {
                 const char *enabled = config.enabled ? "ENABLED" : "DISABLED";
                 const char *bootState = config.bootState ? "ON" : "OFF";
-                printf("Power Port %d: %.3f A - State: %s, Boot: %s, %s\n", 
-                       i + 1, powerPorts.current[i], enabled, bootState, overcurrent);
+                printf("Power Port %d: %.3f A - State: %s, Boot: %s, %s %s\n", 
+                       i + 1, powerPorts.current[i], enabled, bootState, overcurrent, readOnly);
             }
             else
             {
-                printf("Power Port %d: %.3f A - %s (config unavailable)\n", i + 1, powerPorts.current[i], overcurrent);
+                printf("Power Port %d: %.3f A - %s %s (config unavailable)\n", i + 1, powerPorts.current[i], overcurrent, readOnly);
             }
         }
     }
@@ -156,17 +157,18 @@ void DisplayPortStatus(int deviceId)
             PB_ERROR_TYPE cfgResult = PBGetUSBPortConfig(deviceId, &config);
             
             const char *overcurrent = usbPorts.overcurrent[i] ? "[OVERCURRENT]" : "OK";
+            const char *readOnly = usbPorts.readOnly[i] ? "[READONLY]" : "";
             if (cfgResult == PB_SUCCESS)
             {
                 const char *enabled = config.enabled ? "ENABLED" : "DISABLED";
                 const char *bootState = config.bootState ? "ON" : "OFF";
-                printf("USB Port %d: %.3f A, %.2f V - State: %s, Boot: %s, %s\n", 
-                       i + 1, usbPorts.current[i], usbPorts.voltage[i], enabled, bootState, overcurrent);
+                printf("USB Port %d: %.3f A, %.2f V - State: %s, Boot: %s, %s %s\n", 
+                       i + 1, usbPorts.current[i], usbPorts.voltage[i], enabled, bootState, overcurrent, readOnly);
             }
             else
             {
-                printf("USB Port %d: %.3f A, %.2f V - %s (config unavailable)\n", 
-                       i + 1, usbPorts.current[i], usbPorts.voltage[i], overcurrent);
+                printf("USB Port %d: %.3f A, %.2f V - %s %s (config unavailable)\n", 
+                       i + 1, usbPorts.current[i], usbPorts.voltage[i], overcurrent, readOnly);
             }
         }
     }
