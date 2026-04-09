@@ -35,10 +35,41 @@
 
 namespace PowerBox
 {
+    #define PINSBOX_LIGHT_NUM_POWER_PORTS 4
+
+    /* Chip variant for each power port */
+    enum class PinsBoxChip { BTS7006, BTS7012, BTS7080 };
+
+    /* Per-port hardware configuration */
+    struct PinsBoxLightPowerPortConfig {
+        PinsBoxChip chip;
+        uint8_t     pwr_pin;      ///< GPIO pin driving the load switch
+        uint8_t     den_pin;      ///< Diagnostic enable / DEN pin
+        uint8_t     dsel_pin;     ///< DSEL pin (shared across ports)
+        uint8_t     dsel_port;    ///< Port selection value (0 or 1) passed to begin()
+        uint32_t    rsense;       ///< Sense resistor [mΩ]
+        float       max_current;  ///< Over-current threshold [A]
+        uint8_t     adc_channel;  ///< MCP3202 channel for current sense
+    };
+
+    /* Full board hardware configuration for one PinsBoxLight variant */
+    struct PinsBoxLightHWConfig {
+        const char*                  name;
+        const uint8_t*               gpio_pins;        ///< Flat array of all GPIO pins managed by GPIOManager
+        unsigned int                 num_gpio_pins;
+        uint8_t                      supply_inden_pin;  ///< Supply input DEN pin
+        uint8_t                      supply_dsel_pin;   ///< Supply DSEL pin
+        PinsBoxLightPowerPortConfig  power_ports[PINSBOX_LIGHT_NUM_POWER_PORTS];
+    };
+
+    /* Declared hardware variants — definitions are in PinsBoxLightDevice.cpp */
+    extern const PinsBoxLightHWConfig PINSBOX_LIGHT_HW_V1;  ///< Ports 0-1: BTS7012 (6A), ports 2-3: BTS7080 (3A)
+    extern const PinsBoxLightHWConfig PINSBOX_LIGHT_HW_V2;  ///< All ports: BTS7012 (6A)
+
     class PinsBoxLightDevice : public Device
     {
         public:
-            PinsBoxLightDevice(void);
+            explicit PinsBoxLightDevice(const PinsBoxLightHWConfig& hw);
             virtual ~PinsBoxLightDevice(void);
 
             virtual PB_ERROR_TYPE Open(void);
@@ -131,8 +162,7 @@ namespace PowerBox
             MCP3202* adc_;
 
             BTS7006<MCP3202>* supply_;
-            BTS7012<MCP3202>** pwr12_;
-            BTS7080<MCP3202>** pwr34_;
+            BTSPort<MCP3202>* pwr_[PINSBOX_LIGHT_NUM_POWER_PORTS];
 
             std::thread statusListenerThread_;
     };

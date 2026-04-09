@@ -111,5 +111,39 @@ namespace PowerBox
     using BTS7012 = BTS7XXX_<MCP, 4785>;
     template <typename MCP>
     using BTS7080 = BTS7XXX_<MCP, 1800>;
+
+    /* Abstract base for a BTS power port — allows heterogeneous chip types in a single array */
+    template<typename MCP>
+    class BTSPort {
+    public:
+        virtual ~BTSPort() = default;
+        virtual uint8_t  begin(uint32_t rsense, uint8_t diag_pin, uint8_t pwr_pin, uint8_t sel_pin, uint8_t port, uint8_t state) = 0;
+        virtual void     setChannel(uint8_t ch) = 0;
+        virtual void     setSampling(uint8_t n, uint16_t delay) = 0;
+        virtual void     setMaxCurrent(float maxCurrent) = 0;
+        virtual void     setState(uint8_t state) = 0;
+        virtual void     measureCurrent() = 0;
+        virtual uint16_t getCurrent_mA() const = 0;
+        virtual uint8_t  getState() const = 0;
+        virtual uint8_t  getOverCurrent() const = 0;
+    };
+
+    template<typename MCP, uint16_t kILIS>
+    class BTSPortImpl : public BTSPort<MCP> {
+        BTS7XXX_<MCP, kILIS> bts_;
+    public:
+        BTSPortImpl(const GPIOManager& gpio, const MCP& mcp) : bts_(gpio, mcp) {}
+        uint8_t  begin(uint32_t rsense, uint8_t diag_pin, uint8_t pwr_pin, uint8_t sel_pin, uint8_t port, uint8_t state) override
+                     { return bts_.begin(rsense, diag_pin, pwr_pin, sel_pin, port, state); }
+        void     setChannel(uint8_t ch) override           { bts_.setChannel(ch); }
+        void     setSampling(uint8_t n, uint16_t delay) override { bts_.setSampling(n, delay); }
+        void     setMaxCurrent(float maxCurrent) override  { bts_.setMaxCurrent(maxCurrent); }
+        void     setState(uint8_t state) override          { bts_.setState(state); }
+        void     measureCurrent() override                 { bts_.measureCurrent(); }
+        uint16_t getCurrent_mA() const override            { return bts_.getCurrent_mA(); }
+        uint8_t  getState() const override                 { return bts_.getState(); }
+        uint8_t  getOverCurrent() const override           { return bts_.getOverCurrent(); }
+    };
+
 } /* namespace PowerBox */
 #endif // BTS7XXX_H

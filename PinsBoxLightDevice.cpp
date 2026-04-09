@@ -41,7 +41,7 @@
 #include <unistd.h>
 #include <sys/ioctl.h>
 
-#define PINSBOX_NUM_POWER_PORTS 4
+#define PINSBOX_NUM_POWER_PORTS PINSBOX_LIGHT_NUM_POWER_PORTS
 #define PINSBOX_NUM_USB_PORTS 4
 #define PINSBOX_NUM_DEW_PORTS 0
 #define PINSBOX_NUM_BUCK_PORTS 0
@@ -49,8 +49,13 @@
 
 namespace PowerBox
 {
-    static constexpr unsigned int NUM_PINS = 8;
-    static constexpr uint8_t PINS[NUM_PINS] = {
+    /* -------------------------------------------------------------------------
+     * Hardware variant definitions
+     * Add a new entry here for each PinsBoxLight board revision.
+     * The /etc/pinsLightDevice file should contain the variant name (e.g. "v1").
+     * ------------------------------------------------------------------------- */
+
+    static constexpr uint8_t PINS_V1[] = {
         12, // PWR0
         13, // PWR1
         26, // PWR2
@@ -61,18 +66,53 @@ namespace PowerBox
         25, // DSEL
     };
 
-    static const uint8_t *PWR_PINS = &PINS[0];
-    static const uint8_t DSEL_PIN = PINS[7];
-    static const uint8_t INDEN_PIN = PINS[6];
-    static const uint8_t *PWRDEN_PINS = &PINS[4];
+    const PinsBoxLightHWConfig PINSBOX_LIGHT_HW_V1 = {
+        .name            = "PinsBoxLight v1",
+        .gpio_pins       = PINS_V1,
+        .num_gpio_pins   = sizeof(PINS_V1),
+        .supply_inden_pin = 23,
+        .supply_dsel_pin  = 25,
+        .power_ports = {
+            { PinsBoxChip::BTS7012, /*pwr*/12, /*den*/16, /*dsel*/25, /*port*/1, 1200, 6.0f, /*ch*/0 },
+            { PinsBoxChip::BTS7012, /*pwr*/13, /*den*/16, /*dsel*/25, /*port*/0, 1200, 6.0f, /*ch*/0 },
+            { PinsBoxChip::BTS7080, /*pwr*/26, /*den*/24, /*dsel*/25, /*port*/1, 1200, 3.0f, /*ch*/0 },
+            { PinsBoxChip::BTS7080, /*pwr*/18, /*den*/24, /*dsel*/25, /*port*/0, 1200, 3.0f, /*ch*/0 },
+        },
+    };
 
-    PinsBoxLightDevice::PinsBoxLightDevice(void)
+    /* v2: same pin layout as v1, but ports 2-3 use BTS7012 instead of BTS7080 */
+    const PinsBoxLightHWConfig PINSBOX_LIGHT_HW_V2 = {
+        .name            = "PinsBoxLight v2",
+        .gpio_pins       = PINS_V1,
+        .num_gpio_pins   = sizeof(PINS_V1),
+        .supply_inden_pin = 23,
+        .supply_dsel_pin  = 25,
+        .power_ports = {
+            { PinsBoxChip::BTS7012, /*pwr*/12, /*den*/16, /*dsel*/25, /*port*/1, 1200, 6.0f, /*ch*/0 },
+            { PinsBoxChip::BTS7012, /*pwr*/13, /*den*/16, /*dsel*/25, /*port*/0, 1200, 6.0f, /*ch*/0 },
+            { PinsBoxChip::BTS7012, /*pwr*/26, /*den*/24, /*dsel*/25, /*port*/1, 1200, 6.0f, /*ch*/0 },
+            { PinsBoxChip::BTS7012, /*pwr*/18, /*den*/24, /*dsel*/25, /*port*/0, 1200, 6.0f, /*ch*/0 },
+        },
+    };
+
+    /* Factory: create the correct BTSPortImpl for a given chip type */
+    static BTSPort<MCP3202>* MakeBTSPort(PinsBoxChip chip, const GPIOManager& gpio, const MCP3202& adc)
+    {
+        switch (chip) {
+            case PinsBoxChip::BTS7006: return new BTSPortImpl<MCP3202, 17700>(gpio, adc);
+            case PinsBoxChip::BTS7012: return new BTSPortImpl<MCP3202,  4785>(gpio, adc);
+            case PinsBoxChip::BTS7080: return new BTSPortImpl<MCP3202,  1800>(gpio, adc);
+        }
+        return nullptr;
+    }
+
+    PinsBoxLightDevice::PinsBoxLightDevice(const PinsBoxLightHWConfig& hw)
     {
         this->statusListenerRunning = false;
 
         // Initial reset
         this->ResetProperties();
-        
+
         // Load settings from file at construction time
         this->LoadSettings();
 
@@ -81,8 +121,8 @@ namespace PowerBox
                                       -1,
                                       0,
                                       nullptr,
-                                      NUM_PINS,
-                                      PINS);
+                                      hw.num_gpio_pins,
+                                      hw.gpio_pins);
 
         this->gpio_->begin();
 
@@ -92,49 +132,29 @@ namespace PowerBox
 
         // Supply
         this->supply_ = new BTS7006<MCP3202>(*this->gpio_, *this->adc_);
-        this->supply_->begin(1200, INDEN_PIN, 255, DSEL_PIN, 0);
+        this->supply_->begin(1200, hw.supply_inden_pin, 255, hw.supply_dsel_pin, 0);
         this->supply_->setMaxCurrent(12.f);
         this->supply_->setChannel(0);
         this->supply_->setSampling(100, 50);
 
-        // PWR ports
-        this->pwr12_ = new BTS7012<MCP3202>*[2];
-        this->pwr34_ = new BTS7080<MCP3202>*[2];
-
-        this->pwr12_[0] = new BTS7012<MCP3202>(*this->gpio_, *this->adc_);
-        this->pwr12_[1] = new BTS7012<MCP3202>(*this->gpio_, *this->adc_);
-        this->pwr34_[0] = new BTS7080<MCP3202>(*this->gpio_, *this->adc_);
-        this->pwr34_[1] = new BTS7080<MCP3202>(*this->gpio_, *this->adc_);
-
-        // Initialize PWR ports
-        this->pwr12_[0]->begin(1200, PWRDEN_PINS[0], PWR_PINS[0], DSEL_PIN, 1, this->powerBootstrap[0]);
-        this->pwr12_[1]->begin(1200, PWRDEN_PINS[0], PWR_PINS[1], DSEL_PIN, 0, this->powerBootstrap[1]);
-        this->pwr34_[0]->begin(1200, PWRDEN_PINS[1], PWR_PINS[2], DSEL_PIN, 1, this->powerBootstrap[2]);
-        this->pwr34_[1]->begin(1200, PWRDEN_PINS[1], PWR_PINS[3], DSEL_PIN, 0, this->powerBootstrap[3]);
-
-        // PWR sense sample rate and max current
-        this->pwr12_[0]->setMaxCurrent(6.f);
-        this->pwr12_[0]->setChannel(0);
-        this->pwr12_[0]->setSampling(10, 1);
-        this->pwr12_[1]->setMaxCurrent(6.f);
-        this->pwr12_[1]->setChannel(0);
-        this->pwr12_[1]->setSampling(10, 1);
-        this->pwr34_[0]->setMaxCurrent(3.f);
-        this->pwr34_[0]->setChannel(0);
-        this->pwr34_[0]->setSampling(10, 1);
-        this->pwr34_[1]->setMaxCurrent(3.f);
-        this->pwr34_[1]->setChannel(0);
-        this->pwr34_[1]->setSampling(10, 1);
+        // Power ports — instantiate the correct chip type per port
+        for (int i = 0; i < PINSBOX_NUM_POWER_PORTS; ++i)
+        {
+            const PinsBoxLightPowerPortConfig& pc = hw.power_ports[i];
+            this->pwr_[i] = MakeBTSPort(pc.chip, *this->gpio_, *this->adc_);
+            this->pwr_[i]->begin(pc.rsense, pc.den_pin, pc.pwr_pin, pc.dsel_pin, pc.dsel_port, this->powerBootstrap[i]);
+            this->pwr_[i]->setMaxCurrent(pc.max_current);
+            this->pwr_[i]->setChannel(pc.adc_channel);
+            this->pwr_[i]->setSampling(10, 1);
+        }
 
         // All power ports are controllable
-        for (int i = 0; i < this->GetNumPowerPorts(); ++i) {
+        for (int i = 0; i < PINSBOX_NUM_POWER_PORTS; ++i)
             this->powerReadOnly[i] = false;
-        }
 
         // All USB ports are readonly
-        for (int i = 0; i < this->GetNumUSBPorts(); ++i) {
+        for (int i = 0; i < PINSBOX_NUM_USB_PORTS; ++i)
             this->usbReadOnly[i] = true;
-        }
     }
 
     PinsBoxLightDevice::~PinsBoxLightDevice(void)
@@ -149,26 +169,9 @@ namespace PowerBox
         }
 
         // Clean up power ports
-        if(this->pwr12_) {
-            for(int i = 0; i < 2; ++i) {
-                if(this->pwr12_[i]) {
-                    delete this->pwr12_[i];
-                    this->pwr12_[i] = nullptr;
-                }
-            }
-            delete[] this->pwr12_;
-            this->pwr12_ = nullptr;
-        }
-
-        if(this->pwr34_) {
-            for(int i = 0; i < 2; ++i) {
-                if(this->pwr34_[i]) {
-                    delete this->pwr34_[i];
-                    this->pwr34_[i] = nullptr;
-                }
-            }
-            delete[] this->pwr34_;
-            this->pwr34_ = nullptr;
+        for (int i = 0; i < PINSBOX_NUM_POWER_PORTS; ++i) {
+            delete this->pwr_[i];
+            this->pwr_[i] = nullptr;
         }
 
         // Clean up ADC
@@ -415,18 +418,9 @@ namespace PowerBox
         // PWR ports
         for(int i = 0; i < PINSBOX_NUM_POWER_PORTS; ++i)
         {
-            if(i < 2)
-            {
-                this->pwr12_[i]->measureCurrent();
-                this->powerCurrent[i] = this->pwr12_[i]->getCurrent_mA() * 0.001f;
-                this->powerOvercurrent[i] = this->pwr12_[i]->getOverCurrent() ? 1 : 0;
-            }
-            else
-            {
-                this->pwr34_[i - 2]->measureCurrent();
-                this->powerCurrent[i] = this->pwr34_[i - 2]->getCurrent_mA() * 0.001f;
-                this->powerOvercurrent[i] = this->pwr34_[i - 2]->getOverCurrent() ? 1 : 0;
-            }
+            this->pwr_[i]->measureCurrent();
+            this->powerCurrent[i] = this->pwr_[i]->getCurrent_mA() * 0.001f;
+            this->powerOvercurrent[i] = this->pwr_[i]->getOverCurrent() ? 1 : 0;
         }
     }
 
@@ -441,7 +435,7 @@ namespace PowerBox
             return 0;
         }
 
-        uint8_t state = (i < 2) ? this->pwr12_[i]->getState() : this->pwr34_[i - 2]->getState();
+        uint8_t state = this->pwr_[i]->getState();
         this->powerState[i] = state;
         return state;
     }
@@ -457,13 +451,7 @@ namespace PowerBox
             return false;
         }
 
-        if(i < 2)
-        {
-            this->pwr12_[i]->setState(state);
-        }
-        else{
-            this->pwr34_[i - 2]->setState(state);
-        }
+        this->pwr_[i]->setState(state);
         this->powerState[i] = state;
         return true;
     }
@@ -489,6 +477,25 @@ namespace PowerBox
         return model.find("Raspberry Pi") != std::string::npos;
     }
 
+    /* Select the hardware config for this unit based on the contents of /etc/pinsLightDevice */
+    static const PinsBoxLightHWConfig* SelectHWConfig(void)
+    {
+        std::ifstream file("/etc/pinsLightDevice");
+        if (!file.is_open())
+            return &PINSBOX_LIGHT_HW_V1;
+
+        std::string version;
+        std::getline(file, version);
+        // strip trailing whitespace / CR
+        version.erase(version.find_last_not_of(" \t\r\n") + 1);
+
+        if (version == "v1" || version.empty()) return &PINSBOX_LIGHT_HW_V1;
+        if (version == "v2")                    return &PINSBOX_LIGHT_HW_V2;
+
+        PB_ERROR("Unknown PinsBoxLight variant '%s', defaulting to v1", version.c_str());
+        return &PINSBOX_LIGHT_HW_V1;
+    }
+
     bool ScanPinsBoxLight(int *ids)
     {
         // Check if this is a Raspberry PI
@@ -504,7 +511,8 @@ namespace PowerBox
         // Check if device already exists, reuse it instead of creating a new one
         if(g_devices.find(0) == g_devices.end())
         {
-            auto device = std::make_shared<PinsBoxLightDevice>();
+            const PinsBoxLightHWConfig* hwConfig = SelectHWConfig();
+            auto device = std::make_shared<PinsBoxLightDevice>(*hwConfig);
             g_devices[0] = device;
 
             // Start status listener thread
