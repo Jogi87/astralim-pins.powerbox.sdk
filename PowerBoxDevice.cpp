@@ -53,6 +53,9 @@ namespace PowerBox
         this->serialPort = port;
         this->portName = portName;
         this->statusListenerRunning = false;
+
+        // Power port 0 is read only
+        this->powerReadOnly[0] = true;
     }
 
     PB_ERROR_TYPE PowerBoxDevice::Open(void)

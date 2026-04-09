@@ -162,11 +162,13 @@ namespace PowerBox
         int powerState[PB_MAX_POWER_PORTS] = {0};
         int powerBootstrap[PB_MAX_POWER_PORTS] = {0};
         int powerOvercurrent[PB_MAX_POWER_PORTS] = {0};
+        int powerReadOnly[PB_MAX_POWER_PORTS] = {0};
         float usbCurrent[PB_MAX_USB_PORTS] = {0.0f};
         float usbVoltage[PB_MAX_USB_PORTS] = {0.0f};
         int usbState[PB_MAX_USB_PORTS] = {0};
         int usbBootstrap[PB_MAX_USB_PORTS] = {0};
         int usbOvercurrent[PB_MAX_USB_PORTS] = {0};
+        int usbReadOnly[PB_MAX_USB_PORTS] = {0};
         float dewCurrent[PB_MAX_DEW_PORTS] = {0.0f};
         float dewProbe[PB_MAX_DEW_PORTS] = {-127.0f};
         int dewPWM[PB_MAX_DEW_PORTS] = {0};

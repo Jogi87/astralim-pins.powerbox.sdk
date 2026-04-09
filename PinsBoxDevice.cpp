@@ -138,6 +138,9 @@ namespace PowerBox
             this->pwr_[i] = new BTS7012<MCP3204>(*this->gpio_, *this->adc_);
         }
 
+        // Port 0 is readonly
+        this->powerReadOnly[0] = true;
+
         // Initialize PWR ports
         this->pwr_[0]->begin(1200, PWRDEN_PINS[0], 255, DSEL_PIN, 0);
         this->pwr_[1]->begin(1200, PWRDEN_PINS[0], PWR_PINS[0], DSEL_PIN, 1, this->powerBootstrap[1]);

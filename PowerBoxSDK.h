@@ -125,6 +125,7 @@ extern "C"
         int numPorts;                               /* Number of ports */
         float current[PB_MAX_POWER_PORTS];          /* Current draw [A] */
         int overcurrent[PB_MAX_POWER_PORTS];        /* Overcurrent flag */
+        int readOnly[PB_MAX_POWER_PORTS];           /* Indicates if the port can be modified */
     } PB_POWER_PORT_STATUS;
 
     typedef struct _PB_USB_PORT_STATUS
@@ -133,6 +134,7 @@ extern "C"
         float current[PB_MAX_USB_PORTS];            /* Current draw [A] */
         float voltage[PB_MAX_USB_PORTS];            /* Output voltage [V] */
         int overcurrent[PB_MAX_USB_PORTS];          /* Overcurrent flag */
+        int readOnly[PB_MAX_POWER_PORTS];           /* Indicates if the port can be modified */
     } PB_USB_PORT_STATUS;
 
     typedef struct _PB_DEW_PORT_STATUS

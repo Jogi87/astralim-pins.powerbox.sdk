@@ -125,6 +125,12 @@ namespace PowerBox
         this->pwr34_[1]->setMaxCurrent(3.f);
         this->pwr34_[1]->setChannel(0);
         this->pwr34_[1]->setSampling(10, 1);
+
+        // All USB ports are readonly
+        for (int i = 0; i < this->GetNumUSBPorts(); ++i)
+        {
+            this->usbReadOnly[i] = true;
+        }
     }
 
     PinsBoxLightDevice::~PinsBoxLightDevice(void)
@@ -179,6 +185,12 @@ namespace PowerBox
         for(int i = 0; i < PINSBOX_NUM_POWER_PORTS; ++i)
         {
             this->powerBootstrap[i] = 0;
+        }
+
+        for(int i = 0; i < PINSBOX_NUM_USB_PORTS; ++i)
+        {
+            this->usbCurrent[i] = std::numeric_limits<float>::quiet_NaN();
+            this->usbVoltage[i] = std::numeric_limits<float>::quiet_NaN();
         }
     }
 
