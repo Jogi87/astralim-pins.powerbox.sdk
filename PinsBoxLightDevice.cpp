@@ -488,6 +488,9 @@ namespace PowerBox
         std::getline(file, version);
         // strip trailing whitespace / CR
         version.erase(version.find_last_not_of(" \t\r\n") + 1);
+        file.close();
+
+        PB_DEBUG("Using '%s' hw config", version.c_str());
 
         if (version == "v1" || version.empty()) return &PINSBOX_LIGHT_HW_V1;
         if (version == "v2")                    return &PINSBOX_LIGHT_HW_V2;
@@ -511,7 +514,8 @@ namespace PowerBox
         // Check if device already exists, reuse it instead of creating a new one
         if(g_devices.find(0) == g_devices.end())
         {
-            const PinsBoxLightHWConfig* hwConfig = SelectHWConfig();
+            PB_DEBUG("Fetching HW config...");
+            const PinsBoxLightHWConfig *hwConfig = SelectHWConfig();
             auto device = std::make_shared<PinsBoxLightDevice>(*hwConfig);
             g_devices[0] = device;
 
