@@ -66,6 +66,17 @@ namespace PowerBox
         25, // DSEL
     };
 
+    static constexpr uint8_t PINS_V2[] = {
+        12, // PWR0
+        13, // PWR1
+        26, // PWR2
+        18, // PWR3
+        16, // DEN12V_12
+        24, // DEN12V_34
+        23, // DEN12V_IN
+        25, // DSEL
+    };
+
     const PinsBoxLightHWConfig PINSBOX_LIGHT_HW_V1 = {
         .name            = "PinsBoxLight v1",
         .gpio_pins       = PINS_V1,
@@ -75,23 +86,23 @@ namespace PowerBox
         .power_ports = {
             { PinsBoxChip::BTS7012, /*pwr*/12, /*den*/16, /*dsel*/25, /*port*/1, 1200, 6.0f, /*ch*/0 },
             { PinsBoxChip::BTS7012, /*pwr*/13, /*den*/16, /*dsel*/25, /*port*/0, 1200, 6.0f, /*ch*/0 },
-            { PinsBoxChip::BTS7080, /*pwr*/26, /*den*/24, /*dsel*/25, /*port*/1, 1200, 3.0f, /*ch*/0 },
-            { PinsBoxChip::BTS7080, /*pwr*/18, /*den*/24, /*dsel*/25, /*port*/0, 1200, 3.0f, /*ch*/0 },
+            { PinsBoxChip::BTS7012, /*pwr*/26, /*den*/24, /*dsel*/25, /*port*/1, 1200, 6.0f, /*ch*/0 },
+            { PinsBoxChip::BTS7012, /*pwr*/18, /*den*/24, /*dsel*/25, /*port*/0, 1200, 6.0f, /*ch*/0 },
         },
     };
 
-    /* v2: same pin layout as v1, but ports 2-3 use BTS7012 instead of BTS7080 */
+    /* v2: same pin layout as v1, but ports 0-1 use BTS7080 instead of BTS7012 */
     const PinsBoxLightHWConfig PINSBOX_LIGHT_HW_V2 = {
         .name            = "PinsBoxLight v2",
-        .gpio_pins       = PINS_V1,
-        .num_gpio_pins   = sizeof(PINS_V1),
+        .gpio_pins       = PINS_V2,
+        .num_gpio_pins   = sizeof(PINS_V2),
         .supply_inden_pin = 23,
         .supply_dsel_pin  = 25,
         .power_ports = {
-            { PinsBoxChip::BTS7012, /*pwr*/12, /*den*/16, /*dsel*/25, /*port*/1, 1200, 6.0f, /*ch*/0 },
-            { PinsBoxChip::BTS7012, /*pwr*/13, /*den*/16, /*dsel*/25, /*port*/0, 1200, 6.0f, /*ch*/0 },
-            { PinsBoxChip::BTS7012, /*pwr*/26, /*den*/24, /*dsel*/25, /*port*/1, 1200, 6.0f, /*ch*/0 },
-            { PinsBoxChip::BTS7012, /*pwr*/18, /*den*/24, /*dsel*/25, /*port*/0, 1200, 6.0f, /*ch*/0 },
+            { PinsBoxChip::BTS7080, /*pwr*/12, /*den*/16, /*dsel*/25, /*port*/0, 1200, 3.0f, /*ch*/0 },
+            { PinsBoxChip::BTS7080, /*pwr*/13, /*den*/16, /*dsel*/25, /*port*/1, 1200, 3.0f, /*ch*/0 },
+            { PinsBoxChip::BTS7012, /*pwr*/26, /*den*/24, /*dsel*/25, /*port*/0, 1200, 6.0f, /*ch*/0 },
+            { PinsBoxChip::BTS7012, /*pwr*/18, /*den*/24, /*dsel*/25, /*port*/1, 1200, 6.0f, /*ch*/0 },
         },
     };
 
