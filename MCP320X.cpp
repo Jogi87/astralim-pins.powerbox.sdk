@@ -29,6 +29,7 @@
 #include <thread>
 #include <chrono>
 #include <vector>
+#include <iostream>
 
 namespace PowerBox
 {
@@ -56,10 +57,14 @@ namespace PowerBox
     template <uint8_t NCH, uint8_t BIT>
     void MCP320X_<NCH, BIT>::begin(float vRef)
     {
+        if (!this->spi_ || !this->spi_->isConnected()) {
+            std::cerr << "Error: SPI bus not available, MCP320X cannot initialize" << std::endl;
+            this->init_ = false;
+            return;
+        }
+
         this->v_ref_ = vRef;
-
         this->spi_->begin(1000000, 8, 0);
-
         this->init_ = true;
     }
 
@@ -72,6 +77,11 @@ namespace PowerBox
     template <uint8_t NCH, uint8_t BIT>
     uint16_t MCP320X_<NCH, BIT>::analogRead(uint8_t ch) const
     {
+        if (!this->init_ || !this->spi_ || !this->spi_->isConnected()) {
+            std::cerr << "Warning: Attempting to read from uninitialized MCP320X" << std::endl;
+            return 0;
+        }
+
         std::vector<uint8_t> tx;
         std::vector<uint8_t> rx;
 
@@ -84,10 +94,13 @@ namespace PowerBox
         this->spi_->transfer(tx, rx);
 
         // Extract the 12-bit result from bytes 1 and 2
-        uint8_t msb = rx[1];
-        uint8_t lsb = rx[2];
+        if (rx.size() >= 3) {
+            uint8_t msb = rx[1];
+            uint8_t lsb = rx[2];
+            return ((msb << 8) | lsb) & 0xFFF;
+        }
 
-        return ((msb << 8) | lsb) & 0xFFF;
+        return 0;
     }
 
     template <uint8_t NCH, uint8_t BIT>

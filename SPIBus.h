@@ -41,31 +41,60 @@ namespace PowerBox
             uint8_t mode = 0;
             uint8_t bits = 8;
             uint32_t speed = 1000000; // 1MHz
+            bool connected_ = false;
 
         public:
             SPIBus(const char* device) {
                 fd = open(device, O_RDWR);
                 if (fd < 0) {
-                    perror("Failed to open SPI device");
-                    exit(1);
+                    std::cerr << "Warning: Failed to open SPI device " << device << std::endl;
+                    fd = -1;
+                    connected_ = false;
+                } else {
+                    connected_ = true;
                 }
             }
 
-            ~SPIBus() { close(fd); }
+            ~SPIBus() { 
+                if (fd >= 0) {
+                    close(fd);
+                }
+            }
+
+            bool isConnected() const {
+                return connected_;
+            }
 
             void begin(uint32_t speed, uint8_t bits, uint8_t mode)
             {
+                if (!connected_) {
+                    std::cerr << "Warning: Attempting to configure disconnected SPI bus" << std::endl;
+                    return;
+                }
+
                 this->speed = speed;
                 this->bits = bits;
                 this->mode = mode;
 
                 // Set SPI mode, bits per word, and max speed
-                ioctl(fd, SPI_IOC_WR_MODE, &mode);
-                ioctl(fd, SPI_IOC_WR_BITS_PER_WORD, &bits);
-                ioctl(fd, SPI_IOC_WR_MAX_SPEED_HZ, &speed);
+                if (ioctl(fd, SPI_IOC_WR_MODE, &mode) < 0) {
+                    std::cerr << "Warning: Failed to set SPI mode" << std::endl;
+                }
+                if (ioctl(fd, SPI_IOC_WR_BITS_PER_WORD, &bits) < 0) {
+                    std::cerr << "Warning: Failed to set SPI bits per word" << std::endl;
+                }
+                if (ioctl(fd, SPI_IOC_WR_MAX_SPEED_HZ, &speed) < 0) {
+                    std::cerr << "Warning: Failed to set SPI speed" << std::endl;
+                }
             }
 
             void transfer(const std::vector<uint8_t>& tx, std::vector<uint8_t>& rx) {
+                if (!connected_) {
+                    std::cerr << "Warning: Attempting SPI transfer on disconnected bus" << std::endl;
+                    rx.resize(tx.size(), 0);
+                    return;
+                }
+
                 if (rx.size() < tx.size()) {
                     rx.resize(tx.size());
                 }
@@ -79,7 +108,7 @@ namespace PowerBox
                 tr.bits_per_word = bits;
 
                 if (ioctl(fd, SPI_IOC_MESSAGE(1), &tr) < 1) {
-                    perror("SPI transfer failed");
+                    std::cerr << "Warning: SPI transfer failed" << std::endl;
                 }
             }
     };
