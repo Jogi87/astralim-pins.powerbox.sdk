@@ -29,6 +29,7 @@
 #include "PowerBoxDevice.h"
 #include "PinsBoxDevice.h"
 #include "PinsBoxLightDevice.h"
+#include "StellaVitaDevice.h"
 #include <cstring>
 
 using namespace PowerBox;
@@ -55,6 +56,11 @@ PBAPI PB_ERROR_TYPE PBScan(int *number, int *ids)
         PB_DEBUG("PBScan: PinsBoxLight found, skipping PowerBox serial scan");
         return PB_SUCCESS;
     }
+
+    // Always list stella vita device if its a raspi cm4, regardless
+    *number = ScanStellaVita(ids) ? 1 : 0;
+    PB_DEBUG("PBScan: Found %d potential StellaVita device(s)", *number);
+
     PB_ERROR_TYPE result = ScanPowerBox(number, ids);
     PB_DEBUG("PBScan: Total devices found: %d", *number);
     return result;

@@ -1447,7 +1447,6 @@ namespace PowerBox
         if (hDevInfo == INVALID_HANDLE_VALUE)
         {
             PB_DEBUG("SetupDiGetClassDevs failed");
-            *number = 0;
             return PB_SUCCESS;
         }
 

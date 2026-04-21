@@ -60,7 +60,7 @@ if(UNIX)
 endif()
 
 if(LIBGPIOD_FOUND)
-    list(APPEND SDK_SOURCES GPIOManager.cpp PinsBoxDevice.cpp PinsBoxLightDevice.cpp)
+    list(APPEND SDK_SOURCES GPIOManager.cpp PinsBoxDevice.cpp PinsBoxLightDevice.cpp StellaVitaDevice.cpp)
 else()
     message(STATUS "libgpiod not found. GPIO / PinsBox support will be disabled (install libgpiod-dev to enable)")
 endif()

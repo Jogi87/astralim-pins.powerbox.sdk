@@ -233,7 +233,7 @@ namespace PowerBox
         /* Signal listener thread to stop */
         this->statusListenerRunning = false;
         PB_DEBUG("StopStatusListener: Listener stop requested");
-        
+
         /* Wait for the listener thread to actually exit */
         if(this->statusListenerThread_.joinable()) {
             this->statusListenerThread_.join();
@@ -308,12 +308,16 @@ namespace PowerBox
         std::ifstream file("/proc/device-tree/serial-number");
         if(!file.is_open())
         {
-            return nullptr;
+            return "";
         }
 
         std::string serial;
         std::getline(file, serial);
-
+        // device-tree strings are null-terminated; strip null bytes and any
+        // other non-printable characters so the UUID is a valid filename.
+        serial.erase(std::remove_if(serial.begin(), serial.end(),
+                                    [](unsigned char c){ return !std::isprint(c); }),
+                     serial.end());
         return serial;
     }
 
@@ -359,7 +363,7 @@ namespace PowerBox
         {
             return 0.0f;
         }
-        
+
         float uptimeHours = uptimeSeconds / 3600.0f;
         return this->supply12Ah / uptimeHours;
     }
@@ -372,11 +376,11 @@ namespace PowerBox
             SaveSettings();
             return;
         }
-        
+
         Json::Value root;
         file >> root;
         file.close();
-        
+
         // Load power port bootstrap states
         if (root.isMember("powerPorts")) {
             Json::Value powerPorts = root["powerPorts"];
@@ -394,7 +398,7 @@ namespace PowerBox
     void PinsBoxLightDevice::SaveSettings(void)
     {
         Json::Value root;
-        
+
         // Power port bootstrap states
         for (int i = 0; i < PINSBOX_NUM_POWER_PORTS; i++) {
             root["powerPorts"][i]["port"] = i;
@@ -419,10 +423,10 @@ namespace PowerBox
         // Accumulate energy (called every 1 second)
         // Time delta: 1 second = 1/3600 hours
         float timeDeltaHours = 1.0f / 3600.0f;
-        
+
         // Ah = Amps * Hours
         this->supply12Ah += this->supply12A * timeDeltaHours;
-        
+
         // Wh = Volts * Amps * Hours
         this->supply12Wh += this->supply12V * this->supply12A * timeDeltaHours;
 
@@ -537,9 +541,8 @@ namespace PowerBox
         {
             PB_DEBUG("Device at id=0 already exists, reusing it");
         }
-        
-        ids[0] = 0;
 
+        ids[0] = 0;
         return true;
     }
 } /* namespace PowerBox */

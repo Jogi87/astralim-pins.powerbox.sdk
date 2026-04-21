@@ -22,55 +22,25 @@
  * SOFTWARE.
  * **************************************************************************** */
 
-#ifndef PINS_BOX_LIGHT_DEVICE_H
-#define PINS_BOX_LIGHT_DEVICE_H
+#ifndef STELLA_VITA_DEVICE_H
+#define STELLA_VITA_DEVICE_H
 
 #include "Device.h"
 #include "GPIOManager.h"
-#include "BTS7XXX.h"
-#include "MCP320X.h"
 #include <string>
 #include <thread>
 #include <limits>
 
 namespace PowerBox
 {
-    #define PINSBOX_LIGHT_NUM_POWER_PORTS 4
+    #define STELLAVITA_NUM_POWER_PORTS 4
+    #define STELLAVITA_NUM_USB_PORTS   4
 
-    /* Chip variant for each power port */
-    enum class PinsBoxChip { BTS7006, BTS7012, BTS7080 };
-
-    /* Per-port hardware configuration */
-    struct PinsBoxLightPowerPortConfig {
-        PinsBoxChip chip;
-        uint8_t     pwr_pin;      ///< GPIO pin driving the load switch
-        uint8_t     den_pin;      ///< Diagnostic enable / DEN pin
-        uint8_t     dsel_pin;     ///< DSEL pin (shared across ports)
-        uint8_t     dsel_port;    ///< Port selection value (0 or 1) passed to begin()
-        uint32_t    rsense;       ///< Sense resistor [mΩ]
-        float       max_current;  ///< Over-current threshold [A]
-        uint8_t     adc_channel;  ///< MCP3202 channel for current sense
-    };
-
-    /* Full board hardware configuration for one PinsBoxLight variant */
-    struct PinsBoxLightHWConfig {
-        const char*                  name;
-        const uint8_t*               gpio_pins;        ///< Flat array of all GPIO pins managed by GPIOManager
-        unsigned int                 num_gpio_pins;
-        uint8_t                      supply_inden_pin;  ///< Supply input DEN pin
-        uint8_t                      supply_dsel_pin;   ///< Supply DSEL pin
-        PinsBoxLightPowerPortConfig  power_ports[PINSBOX_LIGHT_NUM_POWER_PORTS];
-    };
-
-    /* Declared hardware variants — definitions are in PinsBoxLightDevice.cpp */
-    extern const PinsBoxLightHWConfig PINSBOX_LIGHT_HW_V1;  ///< Ports 0-1: BTS7012 (6A), ports 2-3: BTS7080 (3A)
-    extern const PinsBoxLightHWConfig PINSBOX_LIGHT_HW_V2;  ///< All ports: BTS7012 (6A)
-
-    class PinsBoxLightDevice : public Device
+    class StellaVitaDevice : public Device
     {
         public:
-            explicit PinsBoxLightDevice(const PinsBoxLightHWConfig& hw);
-            virtual ~PinsBoxLightDevice(void);
+            StellaVitaDevice(void);
+            virtual ~StellaVitaDevice(void);
 
             virtual PB_ERROR_TYPE Open(void);
             virtual void Close(void);
@@ -80,16 +50,16 @@ namespace PowerBox
             virtual int GetUpTime(void);
             virtual float GetCoreTemp(void);
             virtual float GetTemperature(void) { return -127.f; }
-            virtual float GetHumidity(void) {return -127.f; }
-            virtual float GetDewPoint(void){ return -127.f; }
+            virtual float GetHumidity(void) { return -127.f; }
+            virtual float GetDewPoint(void) { return -127.f; }
             virtual int GetExtSensor(void) { return 0; }
 
-            virtual float GetSupply12V(void)  { return this->supply12V; }
+            virtual float GetSupply12V(void)  { return std::numeric_limits<float>::quiet_NaN(); }
             virtual float GetSupply5V(void)   { return std::numeric_limits<float>::quiet_NaN(); }
-            virtual float GetSupply12A(void)  { return this->supply12A; }
-            virtual float GetSupply12Ah(void) { return this->supply12Ah; }
-            virtual float GetSupply12Wh(void) { return this->supply12Wh; }
-            virtual float GetSupply12AverageA(void);
+            virtual float GetSupply12A(void)  { return std::numeric_limits<float>::quiet_NaN(); }
+            virtual float GetSupply12Ah(void) { return std::numeric_limits<float>::quiet_NaN(); }
+            virtual float GetSupply12Wh(void) { return std::numeric_limits<float>::quiet_NaN(); }
+            virtual float GetSupply12AverageA(void) { return std::numeric_limits<float>::quiet_NaN(); }
 
             virtual float GetTemperatureOffset() { return 0.f; }
             virtual bool SetTemperatureOffset(float val) { return true; }
@@ -113,11 +83,11 @@ namespace PowerBox
             virtual bool ResetPowerOvercurrent(int i)           { return false; }
             virtual int GetPowerBootState(int i)                { return powerBootstrap[i]; }
             virtual bool SetPowerBootState(int i, int state);
-            virtual int GetUSBState(int i)                      { return 1; }
-            virtual bool SetUSBState(int i, int state)          { return true; }
+            virtual int GetUSBState(int i);
+            virtual bool SetUSBState(int i, int state);
             virtual bool ResetUSBOvercurrent(int i)             { return false; }
-            virtual int GetUSBBootState(int i)                  { return 1; }
-            virtual bool SetUSBBootState(int i, int state)      { return true; }
+            virtual int GetUSBBootState(int i);
+            virtual bool SetUSBBootState(int i, int state);
             virtual int GetDewState(int i)                      { return 0; }
             virtual bool SetDewState(int i, int state, int power) { return true; }
             virtual int GetDewAutoMode(int i)                   { return 0; }
@@ -140,7 +110,7 @@ namespace PowerBox
             virtual bool ResetPWMOvercurrent(void)              { return false; }
 
             virtual int GetFirmwareVersion()                    { return 1; }
-            virtual std::string GetModelType()                  { return "Raspberry Pi"; }
+            virtual std::string GetModelType()                  { return "ToupTek StellaVita"; }
             virtual std::string GetUUID()                       { return this->GetFullSerial(); }
 
             virtual PB_ERROR_TYPE FactoryReset(void)            { return PB_SUCCESS; }
@@ -154,26 +124,21 @@ namespace PowerBox
         private:
             void ResetProperties(void);
             std::string GetFullSerial(void);
-            void GetMCP3202Data(void);
             void LoadSettings(void);
             void SaveSettings(void);
 
             GPIOManager *gpio_;
-            MCP3202* adc_;
-
-            BTS7006<MCP3202>* supply_;
-            BTSPort<MCP3202>* pwr_[PINSBOX_LIGHT_NUM_POWER_PORTS];
 
             std::thread statusListenerThread_;
     };
 
 #ifdef HAVE_LIBGPIOD
-    bool ScanPinsBoxLight(int *ids);
+    bool ScanStellaVita(int *ids);
 #else
-    /* Stub when libgpiod / PinsBox support is not available */
-    inline bool ScanPinsBoxLight(int *ids) { (void)ids; return false; }
+    /* Stub when libgpiod / StellaVita support is not available */
+    inline bool ScanStellaVita(int *ids) { (void)ids; return false; }
 #endif
 
 } /* namespace PowerBox */
 
-#endif /* PINS_BOX_LIGHT_DEVICE_H */
+#endif /* STELLA_VITA_DEVICE_H */
