@@ -23,7 +23,7 @@
 # ###############################################################################
 
 cmake_minimum_required(VERSION 3.22)
-project(PowerBoxSDK VERSION 1.3.0 DESCRIPTION "PowerBox SDK")
+project(PowerBoxSDK VERSION 1.3.1 DESCRIPTION "PowerBox SDK")
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -60,7 +60,7 @@ if(UNIX)
 endif()
 
 if(LIBGPIOD_FOUND)
-    list(APPEND SDK_SOURCES GPIOManager.cpp PinsBoxDevice.cpp PinsBoxLightDevice.cpp StellaVitaDevice.cpp)
+    list(APPEND SDK_SOURCES GPIOManager.cpp PinsBoxDevice.cpp PinsBoxLightDevice.cpp StellaVitaDevice.cpp ASIAirDevice.cpp)
 else()
     message(STATUS "libgpiod not found. GPIO / PinsBox support will be disabled (install libgpiod-dev to enable)")
 endif()

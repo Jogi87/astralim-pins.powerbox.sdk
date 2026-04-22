@@ -22,7 +22,7 @@
  * SOFTWARE.
  * **************************************************************************** */
 
-#define SDK_VERSION "1.3.0"
+#define SDK_VERSION "1.3.1"
 
 #include "PowerBoxSDK.h"
 #include "PowerBoxLogging.h"
@@ -30,6 +30,7 @@
 #include "PinsBoxDevice.h"
 #include "PinsBoxLightDevice.h"
 #include "StellaVitaDevice.h"
+#include "ASIAirDevice.h"
 #include <cstring>
 
 using namespace PowerBox;
@@ -59,7 +60,11 @@ PBAPI PB_ERROR_TYPE PBScan(int *number, int *ids)
 
     // Always list stella vita device if its a raspi cm4, regardless
     *number = ScanStellaVita(ids) ? 1 : 0;
-    PB_DEBUG("PBScan: Found %d potential StellaVita device(s)", *number);
+    PB_DEBUG("PBScan: Found a potential StellaVita device");
+
+    // Always list asiair device if its a raspi, regardless
+    *number += ScanASIAir(ids) ? 1 : 0;
+    PB_DEBUG("PBScan: Found a potential ASIAir device");
 
     PB_ERROR_TYPE result = ScanPowerBox(number, ids);
     PB_DEBUG("PBScan: Total devices found: %d", *number);
