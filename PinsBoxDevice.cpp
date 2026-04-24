@@ -318,6 +318,10 @@ namespace PowerBox
         this->statusListenerRunning = true;
         this->sessionStart_ = std::chrono::steady_clock::now();
         this->statusListenerThread_ = std::thread(&PinsBoxDevice::StatusListenerThreadFunc, this);
+
+        /* Start DHT22 thread separately so it doesn't block the main measurement loop */
+        this->dht22ThreadRunning_ = true;
+        this->dht22Thread_ = std::thread(&PinsBoxDevice::DHT22ThreadFunc, this);
         PB_DEBUG("StartStatusListener: Listener thread started");
     }
 
@@ -326,11 +330,18 @@ namespace PowerBox
         /* Signal listener thread to stop */
         this->statusListenerRunning = false;
         PB_DEBUG("StopStatusListener: Listener stop requested");
-        
+
+        this->dht22ThreadRunning_ = false;
+
         /* Wait for the listener thread to actually exit */
         if(this->statusListenerThread_.joinable()) {
             this->statusListenerThread_.join();
             PB_DEBUG("StopStatusListener: Listener thread joined");
+        }
+
+        if(this->dht22Thread_.joinable()) {
+            this->dht22Thread_.join();
+            PB_DEBUG("StopStatusListener: DHT22 thread joined");
         }
     }
 
@@ -344,10 +355,7 @@ namespace PowerBox
 
         while(this->statusListenerRunning)
         {
-            // Fetch DHT22 sensor data
-            this->GetDHT22Data();
-
-            // Fetch MCP3208 data
+            // Fetch MCP3208 data (fast SPI/I2C — runs every ~1s)
             this->GetMCP3208Data();
 
             // 1 sec delay before we query again
@@ -355,6 +363,19 @@ namespace PowerBox
         }
 
         PB_DEBUG("StatusListener: exiting");
+    }
+
+    void PinsBoxDevice::DHT22ThreadFunc()
+    {
+        PB_DEBUG("DHT22Thread: starting");
+
+        while(this->dht22ThreadRunning_)
+        {
+            this->GetDHT22Data();
+            std::this_thread::sleep_for(std::chrono::seconds(this->envUpdateRate));
+        }
+
+        PB_DEBUG("DHT22Thread: exiting");
     }
 
     PB_ERROR_TYPE PinsBoxDevice::Open(void)

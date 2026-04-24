@@ -72,8 +72,8 @@ namespace PowerBox
             virtual float GetHumidityOffset() { return this->humidityOffset;}
             virtual bool SetHumidityOffset(float val);
             virtual bool SetExtHumidity(float val);
-            virtual int GetEnvUpdateRate() { return 1; }
-            virtual bool SetEnvUpdateRate(int val) { return true; }
+            virtual int GetEnvUpdateRate() { return this->envUpdateRate; }
+            virtual bool SetEnvUpdateRate(int val) { this->envUpdateRate = val; return true; }
             virtual int GetUpdateRate() { return 1; }
             virtual bool SetUpdateRate(int val) { return true; }
 
@@ -126,6 +126,7 @@ namespace PowerBox
 
         protected:
             virtual void StatusListenerThreadFunc();
+            virtual void DHT22ThreadFunc();
 
         private:
             void ResetProperties(void);
@@ -153,6 +154,8 @@ namespace PowerBox
             PWMPort* pwm_;
             PWM* buzzer_;
             std::thread statusListenerThread_;
+            std::thread dht22Thread_;
+            std::atomic<bool> dht22ThreadRunning_{false};
             std::chrono::steady_clock::time_point lastEnergyUpdate_;
             std::chrono::steady_clock::time_point sessionStart_;
             bool energyUpdateInitialized_ = false;
