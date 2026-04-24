@@ -29,7 +29,6 @@
 #include <filesystem>
 #include <mutex>
 #include <fstream>
-#include <sys/sysinfo.h>
 #include <cstring>
 #include <cstdlib>
 #include <cmath>
@@ -317,6 +316,7 @@ namespace PowerBox
 
         /* Start new listener thread */
         this->statusListenerRunning = true;
+        this->sessionStart_ = std::chrono::steady_clock::now();
         this->statusListenerThread_ = std::thread(&PinsBoxDevice::StatusListenerThreadFunc, this);
         PB_DEBUG("StartStatusListener: Listener thread started");
     }
@@ -417,13 +417,8 @@ namespace PowerBox
 
     int PinsBoxDevice::GetUpTime(void)
     {
-        struct sysinfo info;
-        if(sysinfo(&info) == 0)
-        {
-            return info.uptime;
-        }
-
-        return 0;
+        return static_cast<int>(std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::steady_clock::now() - this->sessionStart_).count());
     }
 
     float PinsBoxDevice::GetCoreTemp(void)
@@ -653,15 +648,20 @@ namespace PowerBox
         this->supply12V = this->adc_->analogReadAverage(1, 20, 0) * (36e3 + 4.7e3) / 4.7e3 * 0.001f;
         this->supply5V = this->adc_->analogReadAverage(0, 20, 0) * (35.7e3 + 10e3) / 10e3 * 0.001f;
 
-        // Accumulate energy (called every 1 second)
-        // Time delta: 1 second = 1/3600 hours
-        float timeDeltaHours = 1.0f / 3600.0f;
-        
-        // Ah = Amps * Hours
-        this->supply12Ah += this->supply12A * timeDeltaHours;
-        
-        // Wh = Volts * Amps * Hours
-        this->supply12Wh += this->supply12V * this->supply12A * timeDeltaHours;
+        // Accumulate energy using actual elapsed time
+        auto now = std::chrono::steady_clock::now();
+        if(this->energyUpdateInitialized_)
+        {
+            float timeDeltaHours = std::chrono::duration<float>(now - this->lastEnergyUpdate_).count() / 3600.0f;
+
+            // Ah = Amps * Hours
+            this->supply12Ah += this->supply12A * timeDeltaHours;
+
+            // Wh = Volts * Amps * Hours
+            this->supply12Wh += this->supply12V * this->supply12A * timeDeltaHours;
+        }
+        this->lastEnergyUpdate_ = now;
+        this->energyUpdateInitialized_ = true;
 
         // PWR ports
         for(int i = 0; i < PINSBOX_NUM_POWER_PORTS; ++i)

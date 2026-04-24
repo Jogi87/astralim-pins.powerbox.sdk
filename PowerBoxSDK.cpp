@@ -22,7 +22,7 @@
  * SOFTWARE.
  * **************************************************************************** */
 
-#define SDK_VERSION "1.3.1"
+#define SDK_VERSION "1.3.2"
 
 #include "PowerBoxSDK.h"
 #include "PowerBoxLogging.h"
@@ -919,6 +919,7 @@ PBAPI PB_ERROR_TYPE PBGetSupplyStatus(int id, PB_SUPPLY_STATUS *status)
     status->mainVoltage = device->GetSupply12V();
     status->usbVoltage = device->GetSupply5V();
     status->current = device->GetSupply12A();
+    status->averageAmperes = device->GetSupply12AverageA();
     status->ampereHours = device->GetSupply12Ah();
     status->wattHours = device->GetSupply12Wh();
     PB_DEBUG("PBGetSupplyStatus: 12V=%.2fV, 5V=%.2fV, 12A=%.2fA, Ah=%.2f, Wh=%.2f",

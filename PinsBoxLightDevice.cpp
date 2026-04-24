@@ -29,7 +29,6 @@
 #include <filesystem>
 #include <mutex>
 #include <fstream>
-#include <sys/sysinfo.h>
 #include <cstring>
 #include <cstdlib>
 #include <cmath>
@@ -224,6 +223,7 @@ namespace PowerBox
 
         /* Start new listener thread */
         this->statusListenerRunning = true;
+        this->sessionStart_ = std::chrono::steady_clock::now();
         this->statusListenerThread_ = std::thread(&PinsBoxLightDevice::StatusListenerThreadFunc, this);
         PB_DEBUG("StartStatusListener: Listener thread started");
     }
@@ -329,13 +329,8 @@ namespace PowerBox
 
     int PinsBoxLightDevice::GetUpTime(void)
     {
-        struct sysinfo info;
-        if(sysinfo(&info) == 0)
-        {
-            return info.uptime;
-        }
-
-        return 0;
+        return static_cast<int>(std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::steady_clock::now() - this->sessionStart_).count());
     }
 
     float PinsBoxLightDevice::GetCoreTemp(void)

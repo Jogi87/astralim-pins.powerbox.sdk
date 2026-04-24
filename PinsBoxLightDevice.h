@@ -29,6 +29,7 @@
 #include "GPIOManager.h"
 #include "BTS7XXX.h"
 #include "MCP320X.h"
+#include <chrono>
 #include <string>
 #include <thread>
 #include <limits>
@@ -165,6 +166,7 @@ namespace PowerBox
             BTSPort<MCP3202>* pwr_[PINSBOX_LIGHT_NUM_POWER_PORTS];
 
             std::thread statusListenerThread_;
+            std::chrono::steady_clock::time_point sessionStart_;
     };
 
 #ifdef HAVE_LIBGPIOD

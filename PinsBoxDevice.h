@@ -35,6 +35,7 @@
 #include "DEW.h"
 #include "DHT22.h"
 #include "PWM.h"
+#include <chrono>
 #include <string>
 #include <thread>
 
@@ -152,6 +153,9 @@ namespace PowerBox
             PWMPort* pwm_;
             PWM* buzzer_;
             std::thread statusListenerThread_;
+            std::chrono::steady_clock::time_point lastEnergyUpdate_;
+            std::chrono::steady_clock::time_point sessionStart_;
+            bool energyUpdateInitialized_ = false;
     };
 
 #ifdef HAVE_LIBGPIOD
