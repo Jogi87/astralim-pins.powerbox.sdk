@@ -1,0 +1,48 @@
+# Custom GPIO power box device configuration
+# Write this file to /etc/pinsCustomDevice on the target device.
+# The file must be valid JSON.
+#
+# Port types:
+#   pwm_ports   — PWM-controlled outputs (exposed as dew-heater ports in the SDK).
+#                 Each port provides on/off + 8-bit duty-cycle control at a fixed
+#                 carrier frequency.  Use these for servo motors, fan speed control,
+#                 or any device that needs a variable-duty-cycle PWM signal.
+#
+#                 Fields:
+#                   gpio         — BCM GPIO number (informational; the kernel PWM
+#                                  overlay must map this pin to the chosen channel)
+#                   frequency_hz — PWM carrier frequency in Hz (1 – 10000)
+#                   pwm_chip     — sysfs chip name, e.g. "pwmchip0"
+#                   pwm_channel  — channel index within the chip (0 = GPIO12, 1 = GPIO13
+#                                  on a Raspberry Pi with the pwm-2chan overlay)
+#
+#   power_ports — Simple on/off outputs via plain GPIO (exposed as power ports in the SDK).
+#                 Active-high: GPIO driven high = port ON.
+#
+#                 Fields:
+#                   gpio — BCM GPIO number
+#
+# Limits (hard-coded in the SDK):
+#   pwm_ports   : max 2  (PB_MAX_DEW_PORTS)
+#   power_ports : max 8  (PB_MAX_POWER_PORTS)
+#   gpio        : 0 – 40
+#   frequency_hz: 1 – 10000
+#   pwm_channel : 0 – 7
+#
+# Raspberry Pi overlay required for hardware PWM on GPIO 12 / 13:
+#   Add to /boot/firmware/config.txt:   dtoverlay=pwm-2chan
+#   (GPIO12 = pwmchip0/channel0, GPIO13 = pwmchip0/channel1)
+#
+{
+    "name": "My Custom Device",
+    "pwm_ports": [
+        { "gpio": 12, "frequency_hz": 50, "pwm_chip": "pwmchip0", "pwm_channel": 0 },
+        { "gpio": 13, "frequency_hz": 50, "pwm_chip": "pwmchip0", "pwm_channel": 1 }
+    ],
+    "power_ports": [
+        { "gpio": 22 },
+        { "gpio": 23 },
+        { "gpio": 24 },
+        { "gpio": 25 }
+    ]
+}
