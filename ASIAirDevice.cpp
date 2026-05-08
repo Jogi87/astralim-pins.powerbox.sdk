@@ -136,6 +136,9 @@ namespace PowerBox
     {
         PB_DEBUG("StatusListener: starting");
 
+        // Beep on initial listener launch
+        this->Beep(20, 400);
+
         while (this->statusListenerRunning)
         {
             /* No ADC / sensors on the ASIAir — just keep the thread alive */
