@@ -25,6 +25,7 @@
 #include "ASIAirDevice.h"
 #include "PowerBoxLogging.h"
 #include "Device.h"
+#include "PWM.h"
 #include <filesystem>
 #include <mutex>
 #include <fstream>
@@ -69,6 +70,10 @@ namespace PowerBox
                                       ASIAIR_PWR_PINS);
         this->gpio_->begin();
 
+        /* Initialize buzzer PWM on GPIO19 (pwmchip0, channel 1) */
+        this->buzzer_ = new PWM("pwmchip0", 1);
+        this->buzzer_->setExport();
+
         /* Apply bootstrap states */
         for (int i = 0; i < ASIAIR_NUM_POWER_PORTS; ++i)
         {
@@ -80,6 +85,12 @@ namespace PowerBox
     ASIAirDevice::~ASIAirDevice(void)
     {
         this->StopStatusListener();
+
+        if (this->buzzer_)
+        {
+            delete this->buzzer_;
+            this->buzzer_ = nullptr;
+        }
 
         if (this->gpio_)
         {
@@ -276,6 +287,41 @@ namespace PowerBox
             file.close();
             PB_DEBUG("Settings saved");
         }
+    }
+
+    PB_ERROR_TYPE ASIAirDevice::Beep(int volume, int duration_ms)
+    {
+        if (!this->buzzer_ || duration_ms <= 0)
+        {
+            return PB_ERROR_INVALID_PARAMETER;
+        }
+
+        // Clamp volume to 0-100 range
+        volume = (volume < 0) ? 0 : (volume > 100) ? 100 : volume;
+
+        // If volume is 0, no beep
+        if (volume == 0)
+        {
+            return PB_SUCCESS;
+        }
+
+        // Use 2700 Hz as on the PinsBox buzzer
+        const unsigned int BUZZER_FREQ_HZ = 2700;
+        const unsigned int PERIOD_NS = 1000000000 / BUZZER_FREQ_HZ;
+
+        if (this->buzzer_->getPeriod() != PERIOD_NS)
+        {
+            this->buzzer_->setPeriod(PERIOD_NS);
+        }
+
+        unsigned int duty_ns = (PERIOD_NS * volume) / 100;
+        this->buzzer_->setDutyCycle(duty_ns);
+
+        this->buzzer_->setState(true);
+        std::this_thread::sleep_for(std::chrono::milliseconds(duration_ms));
+        this->buzzer_->setState(false);
+
+        return PB_SUCCESS;
     }
 
     static bool IsRPI(void)

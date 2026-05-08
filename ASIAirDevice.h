@@ -27,6 +27,7 @@
 
 #include "Device.h"
 #include "GPIOManager.h"
+#include "PWM.h"
 #include <limits>
 #include <string>
 #include <thread>
@@ -114,6 +115,8 @@ namespace PowerBox
 
             virtual PB_ERROR_TYPE FactoryReset(void)              { return PB_SUCCESS; }
 
+            virtual PB_ERROR_TYPE Beep(int volume, int duration_ms);
+
             virtual void StartStatusListener(void);
             virtual void StopStatusListener(void);
 
@@ -127,6 +130,7 @@ namespace PowerBox
             void SaveSettings(void);
 
             GPIOManager *gpio_;
+            PWM         *buzzer_;
 
             std::thread statusListenerThread_;
     };
