@@ -188,7 +188,7 @@ namespace PowerBox
         this->buck_->begin(ADJDEN_PIN, BUCK_PIN, DSEL_PIN, 0, this->buckVset, this->buckBootstrap);
 
         this->pwm_ = new PWMPort(*this->gpio_, *this->adc_);
-        this->pwm_->begin(ADJDEN_PIN, PWM_PIN, DSEL_PIN, 1, 60000);
+        this->pwm_->begin(ADJDEN_PIN, PWM_PIN, DSEL_PIN, 1, 30000);
         this->pwm_->setState(0, 0.f);
 
         // Initialize buzzer PWM on GPIO16 (pwmchip2, channel 0)
