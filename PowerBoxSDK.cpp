@@ -1072,8 +1072,8 @@ PBAPI PB_ERROR_TYPE PBGetVersion(int id, PB_VERSION *version)
     version->model[sizeof(version->model) - 1] = '\0';
 
     // UUID
-    strncpy(version->uuid, device->GetUUID().c_str(), 37);
-    version->uuid[37] = '\0';
+    strncpy(version->uuid, device->GetUUID().c_str(), sizeof(version->uuid) - 1);
+    version->uuid[sizeof(version->uuid) - 1] = '\0';
 
     // Serial
     strncpy(version->serial, device->GetSerial().c_str(), 9);
