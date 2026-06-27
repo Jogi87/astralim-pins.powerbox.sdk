@@ -30,6 +30,7 @@
 #include "PinsBoxDevice.h"
 #include "PinsBoxLightDevice.h"
 #include "PinsBoxMiniDevice.h"
+#include "PinsBoxAstralimDevice.h"
 #include "PinsBoxCustomDevice.h"
 #include "StellaVitaDevice.h"
 #include "ASIAirDevice.h"
@@ -64,6 +65,13 @@ PBAPI PB_ERROR_TYPE PBScan(int *number, int *ids)
     if (*number > 0)
     {
         PB_DEBUG("PBScan: PinsBoxMini found, skipping PowerBox serial scan");
+        return PB_SUCCESS;
+    }
+    *number = ScanPinsBoxAstralim(ids) ? 1 : 0;
+    PB_DEBUG("PBScan: Found %d PinsBoxAstralim device(s)", *number);
+    if (*number > 0)
+    {
+        PB_DEBUG("PBScan: PinsBoxAstralim found, skipping custom and serial scan");
         return PB_SUCCESS;
     }
     *number = ScanPinsBoxCustom(ids) ? 1 : 0;

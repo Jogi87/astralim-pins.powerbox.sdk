@@ -60,7 +60,7 @@ if(UNIX)
 endif()
 
 if(LIBGPIOD_FOUND)
-    list(APPEND SDK_SOURCES GPIOManager.cpp PinsBoxDevice.cpp PinsBoxLightDevice.cpp PinsBoxMiniDevice.cpp PinsBoxCustomDevice.cpp StellaVitaDevice.cpp ASIAirDevice.cpp)
+    list(APPEND SDK_SOURCES GPIOManager.cpp PinsBoxDevice.cpp PinsBoxLightDevice.cpp PinsBoxMiniDevice.cpp PinsBoxAstralimDevice.cpp PinsBoxCustomDevice.cpp StellaVitaDevice.cpp ASIAirDevice.cpp)
 else()
     message(STATUS "libgpiod not found. GPIO / PinsBox support will be disabled (install libgpiod-dev to enable)")
 endif()
@@ -117,7 +117,7 @@ install(TARGETS PowerBoxSDK
     LIBRARY DESTINATION lib
     ARCHIVE DESTINATION lib
 )
-install(FILES PowerBoxSDK.h PowerBoxLogging.h PowerBoxSerialPort.h PowerBoxDevice.h PinsBoxDevice.h PinsBoxLight.h PinsBoxMiniDevice.h DS18B20.h DHT22.h ADJ.h DEW.h PWM.h SPIBus.h MCP320X.h GPIOManager.h Device.h USB.h MCP4725.h TCP953X.h INA219.h BTS7XXX.h DESTINATION include)
+install(FILES PowerBoxSDK.h PowerBoxLogging.h PowerBoxSerialPort.h PowerBoxDevice.h PinsBoxDevice.h PinsBoxLight.h PinsBoxMiniDevice.h PinsBoxAstralimDevice.h DS18B20.h DHT22.h ADJ.h DEW.h PWM.h SPIBus.h MCP320X.h GPIOManager.h Device.h USB.h MCP4725.h TCP953X.h INA219.h BTS7XXX.h DESTINATION include)
 
 # CPack configuration for Debian package generation
 if(UNIX)
