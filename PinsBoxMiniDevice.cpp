@@ -103,16 +103,18 @@ namespace PowerBox
     static constexpr float CORR_7080 = KILIS_BTS7080 / KILIS_BTS7006;
 
     /* -------------------------------------------------------------------------
-     * Hardware PWM mapping (sysfs). On a Raspberry Pi 5 the RP1 exposes the
-     * hardware PWM channels via pwmchip0 (GPIO12=ch0, GPIO13=ch1, GPIO18=ch2)
-     * when the pwm overlay is enabled. The buzzer mapping mirrors the full
-     * PinsBox. Adjust these to match the device-tree overlay on your HAT.
+     * PWM signal mapping (sysfs), mirroring PinsBoxDevice:
+     *   - GPIO13 (dew #2) and GPIO18 (PWM 12V port) use the RP1 hardware PWM
+     *     block, pwmchip0 channels 1 and 2.
+     *   - GPIO12 (dew #1) uses the RP1 PIO via "dtoverlay=pwm-pio,gpio=12",
+     *     which exposes its own single-channel pwmchip (pwmchip1, channel 0).
+     *   - The buzzer (GPIO16) mirrors PinsBox on pwmchip2 channel 0.
      * ------------------------------------------------------------------------- */
-    static constexpr const char* DEW1_PWMCHIP  = "pwmchip0"; // GPIO12
-    static constexpr int         DEW1_PWMCH    = 0;
-    static constexpr const char* DEW2_PWMCHIP  = "pwmchip0"; // GPIO13
-    static constexpr int         DEW2_PWMCH    = 1;
-    static constexpr const char* PWM12V_PWMCHIP = "pwmchip0"; // GPIO18
+    static constexpr const char* DEW1_PWMCHIP   = "pwmchip1"; // GPIO12 (PIO, pwm-pio overlay)
+    static constexpr int         DEW1_PWMCH     = 0;
+    static constexpr const char* DEW2_PWMCHIP   = "pwmchip0"; // GPIO13 (HW PWM)
+    static constexpr int         DEW2_PWMCH     = 1;
+    static constexpr const char* PWM12V_PWMCHIP = "pwmchip0"; // GPIO18 (HW PWM)
     static constexpr int         PWM12V_PWMCH   = 2;
     static constexpr const char* BUZZER_PWMCHIP = "pwmchip2"; // GPIO16
     static constexpr int         BUZZER_PWMCH   = 0;
