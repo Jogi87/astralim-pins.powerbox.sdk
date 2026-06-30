@@ -93,14 +93,14 @@ namespace PowerBox
             static constexpr int VMIN = std::max(1000, (int)(VMAX - ADJ_R1 * SUPPLY_REF / ADJ_R2 * 1e3));
     };
 
-    template <typename MCP = MCP3204>
+    template <typename MCP = MCP3204, uint16_t kILIS = 1800>
     class PWMPortT
     {
         public:
             PWMPortT(const GPIOManager& gpio, const MCP& mcp, const char* chip = "pwmchip0", int ch = 2);
             ~PWMPortT(void);
 
-            uint8_t begin(uint8_t diag_pin, uint8_t pwr_pin, uint8_t sel_pin, uint8_t port, unsigned int freq, uint8_t adc_ch = 2);
+            uint8_t begin(uint8_t diag_pin, uint8_t pwr_pin, uint8_t sel_pin, uint8_t port, unsigned int freq, uint8_t adc_ch = 2, float maxCurrent = 3.0f);
 
             void enable(void) { this->bts_->enable(); }
             void disable(void) { this->bts_->disable(); }
@@ -120,12 +120,12 @@ namespace PowerBox
             const GPIOManager* gpio_;
             const MCP* mcp_;
 
-            BTS7080<MCP>* bts_;
+            BTS7XXX_<MCP, kILIS>* bts_;
             PWM* pwm_;
     };
 
-    /* Backward-compatible alias: the historical MCP3204-based PWM port */
-    using PWMPort = PWMPortT<MCP3204>;
+    /* Backward-compatible alias: the historical MCP3204 / BTS7080 PWM port */
+    using PWMPort = PWMPortT<MCP3204, 1800>;
 } /* namespace PowerBox */
 
 #endif /* ADJ_H */

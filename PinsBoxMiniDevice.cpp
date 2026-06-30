@@ -87,6 +87,21 @@ namespace PowerBox
     static constexpr float SUPPLY_R1 = 36e3f;
     static constexpr float SUPPLY_R2 = 4.7e3f;
 
+    /* BTS current-sense scaling (sense current IS = I_load / kILIS) */
+    static constexpr float KILIS_BTS7006 = 17700.f; // total input supply
+    static constexpr float KILIS_BTS7012 =  4785.f; // 12V & PWM 12V ports
+    static constexpr float KILIS_BTS7080 =  1800.f; // dew ports
+
+    /*
+     * Hardware quirk: the BTS7006 supply DEN is wired to DSEL (GPIO26). While a
+     * "sel 1" port is measured (DSEL driven high) the BTS7006 sense also drives
+     * the shared IS line, so those ports read high. Correct each one by
+     * subtracting the supply's scaled contribution:
+     *   I_port = reported - I_supply * (kILIS_port / kILIS_supply)
+     */
+    static constexpr float CORR_7012 = KILIS_BTS7012 / KILIS_BTS7006;
+    static constexpr float CORR_7080 = KILIS_BTS7080 / KILIS_BTS7006;
+
     /* -------------------------------------------------------------------------
      * Hardware PWM mapping (sysfs). On a Raspberry Pi 5 the RP1 exposes the
      * hardware PWM channels via pwmchip0 (GPIO12=ch0, GPIO13=ch1, GPIO18=ch2)
@@ -132,6 +147,16 @@ namespace PowerBox
         this->adc_ = new MCP3202(*this->gpio_);
         this->adc_->begin(3.3f);
 
+        // Total 12V input current sense (BTS7006, single channel).
+        // Hardware quirk: its DEN is wired to DSEL (GPIO26) instead of a
+        // dedicated diag line, so it is read by driving DSEL high in isolation
+        // (diag_pin = sel_pin = DSEL, port = 1, no switch pin).
+        this->supply_ = new BTS7006<MCP3202>(*this->gpio_, *this->adc_);
+        this->supply_->begin(1200, DSEL_PIN, 255, DSEL_PIN, 1);
+        this->supply_->setMaxCurrent(10.f);
+        this->supply_->setChannel(ADC_CH_ISENSE);
+        this->supply_->setSampling(100, 50);
+
         // 12V power ports (3x BTS7012). DSEL selects which port's current sense
         // is routed to the shared ADC channel within each DEN group.
         this->pwr_ = new BTS7012<MCP3202>*[PINSBOXMINI_NUM_POWER_PORTS];
@@ -166,9 +191,10 @@ namespace PowerBox
         this->dew_[0]->begin(DEN_DEW, DEW_PINS[0], DSEL_PIN, DS18_PINS[0], 0, 400, this->dewAuto[0], ADC_CH_ISENSE);
         this->dew_[1]->begin(DEN_DEW, DEW_PINS[1], DSEL_PIN, DS18_PINS[1], 1, 400, this->dewAuto[1], ADC_CH_ISENSE);
 
-        // PWM 12V port (BTS7012, on/off + duty cycle)
-        this->pwm_ = new PWMPortT<MCP3202>(*this->gpio_, *this->adc_, PWM12V_PWMCHIP, PWM12V_PWMCH);
-        this->pwm_->begin(DEN_12V_3PWM, PWM_PWR_PIN, DSEL_PIN, 1, 30000, ADC_CH_ISENSE);
+        // PWM 12V port — 2nd channel of the BTS7012 shared with 12V port #3
+        // (DEN GPIO2, DSEL sel 1). On/off + 8-bit duty cycle, 6A limit.
+        this->pwm_ = new PWMPortT<MCP3202, 4785>(*this->gpio_, *this->adc_, PWM12V_PWMCHIP, PWM12V_PWMCH);
+        this->pwm_->begin(DEN_12V_3PWM, PWM_PWR_PIN, DSEL_PIN, 1, 30000, ADC_CH_ISENSE, 6.0f);
         this->pwm_->setState(0, 0.f);
 
         // Buzzer PWM on GPIO16
@@ -185,6 +211,12 @@ namespace PowerBox
         if(this->dht_) {
             delete this->dht_;
             this->dht_ = nullptr;
+        }
+
+        // Clean up supply monitoring
+        if(this->supply_) {
+            delete this->supply_;
+            this->supply_ = nullptr;
         }
 
         // Clean up power ports
@@ -584,10 +616,13 @@ namespace PowerBox
 
     void PinsBoxMiniDevice::GetMCP3202Data(void)
     {
+        // Total input current (BTS7006). Read first and in isolation: driving
+        // DSEL high enables only the supply sense (all port DENs are low).
+        this->supply_->measureCurrent();
+        this->supply12A = this->supply_->getCurrent_mA() * 0.001f;
+
         // 12V supply sense (ADC channel 1, divider 36k / 4.7k)
         this->supply12V = this->adc_->analogReadAverage(ADC_CH_12V, 20, 0) * (SUPPLY_R1 + SUPPLY_R2) / SUPPLY_R2 * 0.001f;
-
-        float totalCurrent = 0.0f;
 
         // 12V power ports
         for(int i = 0; i < PINSBOXMINI_NUM_POWER_PORTS; ++i)
@@ -595,7 +630,6 @@ namespace PowerBox
             this->pwr_[i]->measureCurrent();
             this->powerCurrent[i] = this->pwr_[i]->getCurrent_mA() * 0.001f;
             this->powerOvercurrent[i] = this->pwr_[i]->getOverCurrent() ? 1 : 0;
-            totalCurrent += this->powerCurrent[i];
         }
 
         // Dew ports
@@ -607,18 +641,19 @@ namespace PowerBox
             this->dewProbe[i] = std::round(this->dew_[i]->getTemperature() * 100.0f) / 100.0f;
             this->dewPWM[i] = this->dew_[i]->getDutyCycle();
             this->dewState[i] = this->dew_[i]->getState();
-            totalCurrent += this->dewCurrent[i];
         }
 
         // PWM 12V port
         this->pwm_->measureCurrent();
         this->pwmCurrent = this->pwm_->getCurrent_mA() * 0.001f;
         this->pwmOvercurrent = this->pwm_->getOverCurrent() ? 1 : 0;
-        totalCurrent += this->pwmCurrent;
 
-        // No dedicated input current sensor: total supply current is the sum of
-        // all measured port currents.
-        this->supply12A = totalCurrent;
+        // Correct the "sel 1" ports for the mis-wired BTS7006 sense bleeding onto
+        // the shared IS line while DSEL is high: 12V #2 (pwr_[1], BTS7012), the
+        // PWM port (BTS7012) and dew #2 (dew_[1], BTS7080).
+        this->powerCurrent[1] = std::max(0.f, this->powerCurrent[1] - this->supply12A * CORR_7012);
+        this->pwmCurrent      = std::max(0.f, this->pwmCurrent      - this->supply12A * CORR_7012);
+        this->dewCurrent[1]   = std::max(0.f, this->dewCurrent[1]   - this->supply12A * CORR_7080);
 
         // Accumulate energy using actual elapsed time
         auto now = std::chrono::steady_clock::now();

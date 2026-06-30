@@ -45,13 +45,20 @@ namespace PowerBox
      * PinsBoxMiniDevice — Raspberry Pi 5 + HAT power box.
      *
      *   3x 12V power out      (BTS7012, on/off)
-     *   1x 12V PWM out        (BTS7012, on/off + 8-bit duty cycle)
+     *   1x 12V PWM out        (BTS7012, 2nd channel shared with 12V #3; on/off + 8-bit duty cycle)
      *   2x dew heater out     (BTS7080, on/off + 8-bit duty cycle, DS18B20 probe each)
      *   4x USB               (read-only, non-controllable: 2x USB2, 2x USB3)
      *   1x DHT22             (ambient temperature / humidity)
+     *   1x BTS7006           (total 12V input current sense)
      *
      * A single MCP3202 ADC is used: channel 0 is the (DSEL-multiplexed) current
      * sense shared by every BTS chip, channel 1 is the 12V supply sense.
+     *
+     * Hardware quirk: the BTS7006 supply DEN is wired to DSEL (GPIO26) rather
+     * than a dedicated diag line. The supply is therefore read by driving DSEL
+     * high in isolation; as a side effect the BTS7006 sense also bleeds onto the
+     * shared IS line while any "sel 1" port is measured, so the current of those
+     * ports (12V #2, the PWM port, dew #2) is corrected in software.
      */
     class PinsBoxMiniDevice : public Device
     {
@@ -160,9 +167,10 @@ namespace PowerBox
             GPIOManager *gpio_;
             MCP3202* adc_;
 
+            BTS7006<MCP3202>* supply_;
             BTS7012<MCP3202>** pwr_;
             DewPortT<MCP3202>** dew_;
-            PWMPortT<MCP3202>* pwm_;
+            PWMPortT<MCP3202, 4785>* pwm_;
             PWM* buzzer_;
             std::thread statusListenerThread_;
             std::thread dht22Thread_;

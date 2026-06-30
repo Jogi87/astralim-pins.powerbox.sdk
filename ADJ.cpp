@@ -144,28 +144,28 @@ namespace PowerBox
 
 
 
-    template <typename MCP>
-    PWMPortT<MCP>::PWMPortT(const GPIOManager& gpio, const MCP& mcp, const char* chip, int ch)
+    template <typename MCP, uint16_t kILIS>
+    PWMPortT<MCP, kILIS>::PWMPortT(const GPIOManager& gpio, const MCP& mcp, const char* chip, int ch)
     {
         this->gpio_ = &gpio;
         this->mcp_ = &mcp;
 
-        this->bts_ = new BTS7080<MCP>(gpio, mcp);
+        this->bts_ = new BTS7XXX_<MCP, kILIS>(gpio, mcp);
         this->pwm_ = new PWM(chip, ch);
     }
 
-    template <typename MCP>
-    PWMPortT<MCP>::~PWMPortT(void)
+    template <typename MCP, uint16_t kILIS>
+    PWMPortT<MCP, kILIS>::~PWMPortT(void)
     {
         delete this->bts_;
         delete this->pwm_;
     }
 
-    template <typename MCP>
-    uint8_t PWMPortT<MCP>::begin(uint8_t diag_pin, uint8_t pwr_pin, uint8_t sel_pin, uint8_t port, unsigned int freq, uint8_t adc_ch)
+    template <typename MCP, uint16_t kILIS>
+    uint8_t PWMPortT<MCP, kILIS>::begin(uint8_t diag_pin, uint8_t pwr_pin, uint8_t sel_pin, uint8_t port, unsigned int freq, uint8_t adc_ch, float maxCurrent)
     {
         this->bts_->begin(1200, diag_pin, pwr_pin, sel_pin, port);
-        this->bts_->setMaxCurrent(3.0f);
+        this->bts_->setMaxCurrent(maxCurrent);
         this->bts_->setChannel(adc_ch);
         this->bts_->setSampling(100, 50);
 
@@ -177,8 +177,8 @@ namespace PowerBox
         return true;
     }
 
-    template <typename MCP>
-    void PWMPortT<MCP>::setState(uint8_t state, uint8_t dc)
+    template <typename MCP, uint16_t kILIS>
+    void PWMPortT<MCP, kILIS>::setState(uint8_t state, uint8_t dc)
     {
         // Convert duty cycle to nano seconds
         unsigned int period = this->pwm_->getPeriod();
@@ -198,8 +198,8 @@ namespace PowerBox
         this->bts_->setState(state);
     }
 
-    template <typename MCP>
-    uint8_t PWMPortT<MCP>::getDutyCycle(void) const
+    template <typename MCP, uint16_t kILIS>
+    uint8_t PWMPortT<MCP, kILIS>::getDutyCycle(void) const
     {
         unsigned int period = this->pwm_->getPeriod();
         unsigned int dutyCycle_ns = this->pwm_->getDutyCycle();
@@ -212,7 +212,7 @@ namespace PowerBox
         return (dutyCycle_ns * 255) / period;
     }
 
-    /* Explicit instantiations for the supported ADC types */
-    template class PWMPortT<MCP3204>;
-    template class PWMPortT<MCP3202>;
+    /* Explicit instantiations for the supported (ADC, BTS) combinations */
+    template class PWMPortT<MCP3204, 1800>;  // PinsBox: BTS7080 PWM port
+    template class PWMPortT<MCP3202, 4785>;  // PinsBoxMini: BTS7012 PWM port
 } /* namespace PowerBox */
