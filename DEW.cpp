@@ -27,18 +27,20 @@
 
 namespace PowerBox
 {
-    DewPort::DewPort(const GPIOManager& gpio, const MCP3204& mcp, const char* chip, int ch)
+    template <typename MCP>
+    DewPortT<MCP>::DewPortT(const GPIOManager& gpio, const MCP& mcp, const char* chip, int ch)
     {
         this->gpio_ = &gpio;
         this->mcp_ = &mcp;
         this->auto_mode_ = false;
 
         this->probe_ = new DS18B20(gpio);
-        this->bts_ = new BTS7080<MCP3204>(gpio, mcp);
+        this->bts_ = new BTS7080<MCP>(gpio, mcp);
         this->pwm_ = new PWM(chip, ch);
     }
 
-    DewPort::~DewPort(void)
+    template <typename MCP>
+    DewPortT<MCP>::~DewPortT(void)
     {
         if(this->probe_) {
             delete this->probe_;
@@ -56,13 +58,14 @@ namespace PowerBox
         this->auto_mode_ = false;
     }
 
-    uint8_t DewPort::begin(uint8_t diag_pin, uint8_t pwr_pin, uint8_t sel_pin, uint8_t probe_pin, uint8_t port, unsigned int freq, bool mode)
+    template <typename MCP>
+    uint8_t DewPortT<MCP>::begin(uint8_t diag_pin, uint8_t pwr_pin, uint8_t sel_pin, uint8_t probe_pin, uint8_t port, unsigned int freq, bool mode, uint8_t adc_ch)
     {
         this->probe_->begin(probe_pin);
 
         this->bts_->begin(1200, diag_pin, pwr_pin, sel_pin, port);
         this->bts_->setMaxCurrent(3.f);
-        this->bts_->setChannel(2);
+        this->bts_->setChannel(adc_ch);
         this->bts_->setSampling(100, 50);
 
         RETURN_IF_ERROR(this->pwm_->setExport());
@@ -75,7 +78,8 @@ namespace PowerBox
         return true;
     }
 
-    void DewPort::update(float dewPoint, float threshold)
+    template <typename MCP>
+    void DewPortT<MCP>::update(float dewPoint, float threshold)
     {
         // Update heater power, if auto mode is enabled and probe is available
         if(this->auto_mode_)
@@ -116,7 +120,8 @@ namespace PowerBox
         this->bts_->measureCurrent();
     }
 
-    void DewPort::setState(uint8_t state, uint8_t dc)
+    template <typename MCP>
+    void DewPortT<MCP>::setState(uint8_t state, uint8_t dc)
     {
         if(!this->auto_mode_)
         {
@@ -124,7 +129,8 @@ namespace PowerBox
         }
     }
 
-    uint8_t DewPort::getDutyCycle(void) const
+    template <typename MCP>
+    uint8_t DewPortT<MCP>::getDutyCycle(void) const
     {
         unsigned int period = this->pwm_->getPeriod();
         unsigned int dutyCycle_ns = this->pwm_->getDutyCycle();
@@ -137,7 +143,8 @@ namespace PowerBox
         return (dutyCycle_ns * 255) / period;
     }
 
-    void DewPort::setState_(uint8_t state, uint8_t dutyCycle)
+    template <typename MCP>
+    void DewPortT<MCP>::setState_(uint8_t state, uint8_t dutyCycle)
     {
         // Convert duty cycle to nano seconds
         unsigned int period = this->pwm_->getPeriod();
@@ -148,4 +155,8 @@ namespace PowerBox
         this->pwm_->setState(dutyCycle != 0);
         this->bts_->setState(state);
     }
+
+    /* Explicit instantiations for the supported ADC types */
+    template class DewPortT<MCP3204>;
+    template class DewPortT<MCP3202>;
 } /* namespace PowerBox */

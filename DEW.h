@@ -34,13 +34,14 @@
 
 namespace PowerBox
 {
-    class DewPort
+    template <typename MCP = MCP3204>
+    class DewPortT
     {
         public:
-            DewPort(const GPIOManager& gpio, const MCP3204& mcp, const char* chip, int ch);
-            ~DewPort(void);
+            DewPortT(const GPIOManager& gpio, const MCP& mcp, const char* chip, int ch);
+            ~DewPortT(void);
 
-            uint8_t begin(uint8_t diag_pin, uint8_t pwr_pin, uint8_t sel_pin, uint8_t probe_pin, uint8_t port, unsigned int freq, bool mode);
+            uint8_t begin(uint8_t diag_pin, uint8_t pwr_pin, uint8_t sel_pin, uint8_t probe_pin, uint8_t port, unsigned int freq, bool mode, uint8_t adc_ch = 2);
             void update(float dewPoint, float threshold);
 
             void enable(void) { this->bts_->enable(); }
@@ -62,14 +63,17 @@ namespace PowerBox
             void setState_(uint8_t state, uint8_t dutyCycle);
 
             const GPIOManager* gpio_;
-            const MCP3204* mcp_;
+            const MCP* mcp_;
 
             DS18B20* probe_;
-            BTS7080<MCP3204>* bts_;
+            BTS7080<MCP>* bts_;
             PWM* pwm_;
 
             bool auto_mode_;
     };
+
+    /* Backward-compatible alias: the historical MCP3204-based dew port */
+    using DewPort = DewPortT<MCP3204>;
 } /* namespace PowerBox */
 
 #endif /* DEW_H */

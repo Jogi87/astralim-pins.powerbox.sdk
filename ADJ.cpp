@@ -144,26 +144,29 @@ namespace PowerBox
 
 
 
-    PWMPort::PWMPort(const GPIOManager& gpio, const MCP3204& mcp)
+    template <typename MCP>
+    PWMPortT<MCP>::PWMPortT(const GPIOManager& gpio, const MCP& mcp, const char* chip, int ch)
     {
         this->gpio_ = &gpio;
         this->mcp_ = &mcp;
 
-        this->bts_ = new BTS7080<MCP3204>(gpio, mcp);
-        this->pwm_ = new PWM("pwmchip0", 2);
+        this->bts_ = new BTS7080<MCP>(gpio, mcp);
+        this->pwm_ = new PWM(chip, ch);
     }
 
-    PWMPort::~PWMPort(void)
+    template <typename MCP>
+    PWMPortT<MCP>::~PWMPortT(void)
     {
         delete this->bts_;
         delete this->pwm_;
     }
 
-    uint8_t PWMPort::begin(uint8_t diag_pin, uint8_t pwr_pin, uint8_t sel_pin, uint8_t port, unsigned int freq)
+    template <typename MCP>
+    uint8_t PWMPortT<MCP>::begin(uint8_t diag_pin, uint8_t pwr_pin, uint8_t sel_pin, uint8_t port, unsigned int freq, uint8_t adc_ch)
     {
         this->bts_->begin(1200, diag_pin, pwr_pin, sel_pin, port);
         this->bts_->setMaxCurrent(3.0f);
-        this->bts_->setChannel(2);
+        this->bts_->setChannel(adc_ch);
         this->bts_->setSampling(100, 50);
 
         RETURN_IF_ERROR(this->pwm_->setExport());
@@ -174,7 +177,8 @@ namespace PowerBox
         return true;
     }
 
-    void PWMPort::setState(uint8_t state, uint8_t dc)
+    template <typename MCP>
+    void PWMPortT<MCP>::setState(uint8_t state, uint8_t dc)
     {
         // Convert duty cycle to nano seconds
         unsigned int period = this->pwm_->getPeriod();
@@ -194,11 +198,12 @@ namespace PowerBox
         this->bts_->setState(state);
     }
 
-    uint8_t PWMPort::getDutyCycle(void) const
+    template <typename MCP>
+    uint8_t PWMPortT<MCP>::getDutyCycle(void) const
     {
         unsigned int period = this->pwm_->getPeriod();
         unsigned int dutyCycle_ns = this->pwm_->getDutyCycle();
-        
+
         if (period == 0) {
             return 0;
         }
@@ -206,4 +211,8 @@ namespace PowerBox
         // Convert nanoseconds back to 0-255 scale
         return (dutyCycle_ns * 255) / period;
     }
+
+    /* Explicit instantiations for the supported ADC types */
+    template class PWMPortT<MCP3204>;
+    template class PWMPortT<MCP3202>;
 } /* namespace PowerBox */
