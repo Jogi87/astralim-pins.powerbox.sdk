@@ -1,6 +1,5 @@
 #include "PinsBoxAstralimDevice.h"
 #include "PowerBoxLogging.h"
-#include "RPIUtils.h"
 
 #include <algorithm>
 #include <cerrno>
@@ -13,6 +12,7 @@
 #include <iomanip>
 #include <linux/i2c-dev.h>
 #include <memory>
+#include <mutex>
 #include <sstream>
 #include <sys/ioctl.h>
 #include <unistd.h>
@@ -32,6 +32,17 @@ constexpr std::array<int, AstralimDewPortCount> PWMChannels = {2, 1};
 constexpr std::array<uint8_t, AstralimDewPortCount> DewGPIOs = {18, 13};
 constexpr std::array<uint8_t, 6> INAAddresses = {0x40, 0x41, 0x44, 0x46, 0x4d, 0x49};
 constexpr std::array<float, 6> INAShuntOhms = {0.005f, 0.01f, 0.01f, 0.01f, 0.01f, 0.01f};
+
+bool IsRPI()
+{
+    std::ifstream file("/proc/device-tree/model");
+    if (!file.is_open())
+        return false;
+
+    std::string model;
+    std::getline(file, model);
+    return model.find("Raspberry Pi") != std::string::npos;
+}
 
 uint16_t Swap16(uint16_t value)
 {
