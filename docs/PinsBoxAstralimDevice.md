@@ -23,6 +23,11 @@ device uses existing PowerBoxSDK status fields and port APIs.
 The PWM period is fixed at `1000000 ns` for a 1000 Hz carrier. Dew ports use the
 same 8-bit duty semantics as the existing SDK dew ports.
 
+Astralim currently exposes BME280 environment temperature, humidity, and
+calculated dew point through the SDK environment status fields. Dew probe
+temperatures are not supported unless dedicated probe sensors are added later,
+so dew probe status remains at the SDK no-sensor value.
+
 ## Scan Behavior
 
 `PBScan()` probes `PinsBoxAstralimDevice` after the fixed PINS devices and before

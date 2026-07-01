@@ -622,8 +622,6 @@ void PinsBoxAstralimDevice::UpdateSensors()
             temperature = t + temperatureOffset;
             humidity = h + humidityOffset;
             dewPoint = d;
-            dewProbe[0] = dewPoint;
-            dewProbe[1] = dewPoint;
         }
     }
 
