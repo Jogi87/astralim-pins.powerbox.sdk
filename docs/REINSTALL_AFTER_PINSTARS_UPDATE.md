@@ -32,7 +32,8 @@ The script:
 - backs up the current plugin SDK as `PowerBoxSDK.dll.backup.YYYYMMDD-HHMMSS`
 - copies the Astralim-enabled SDK to the active NINA plugin path
 - sets ownership and permissions
-- verifies Astralim marker strings are present in the active plugin SDK
+- verifies Astralim marker strings are present in the active plugin SDK using a
+  temporary `strings` dump
 - restarts `pins.service`
 
 ## Rollback

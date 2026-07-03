@@ -5,9 +5,14 @@ PLUGIN_SDK="/home/pi/.local/share/NINA/Plugins/3.0.0/pins.plugin/PowerBoxSDK.dll
 INSTALLED_SDK="/usr/local/lib/libPowerBoxSDK.so"
 SERVICE_NAME="pins.service"
 RESTARTED=0
+MARKER_DUMP=""
 
 restart_on_exit()
 {
+    if [[ -n "${MARKER_DUMP}" ]]; then
+        rm -f "${MARKER_DUMP}"
+    fi
+
     if [[ "${RESTARTED}" != "1" ]]; then
         echo "Restarting ${SERVICE_NAME} after early exit..."
         sudo systemctl start "${SERVICE_NAME}" || true
@@ -60,8 +65,10 @@ sudo chown pi:pi "${PLUGIN_SDK}"
 sudo chmod 755 "${PLUGIN_SDK}"
 
 echo "Verifying active plugin SDK markers..."
+MARKER_DUMP="$(mktemp)"
+strings "${PLUGIN_SDK}" > "${MARKER_DUMP}"
 for marker in PinsBoxAstralim Astralim BME280 INA219; do
-    if ! strings "${PLUGIN_SDK}" | grep -q "${marker}"; then
+    if ! grep -q "${marker}" "${MARKER_DUMP}"; then
         echo "ERROR: active plugin SDK does not contain expected marker: ${marker}"
         echo "Rollback with:"
         echo "  sudo cp '${backup}' '${PLUGIN_SDK}'"
