@@ -52,6 +52,42 @@ cmake --build build -j"$(nproc)"
 sudo cmake --install build
 ```
 
+## Pi'n'Stars Plugin Deployment
+
+The active Pi'n'Stars / NINA plugin currently loads PowerBoxSDK from the plugin
+directory, so the tested SDK library was deployed manually after installation:
+
+```bash
+sudo cp /usr/local/lib/libPowerBoxSDK.so /home/pi/.local/share/NINA/Plugins/3.0.0/pins.plugin/PowerBoxSDK.dll
+sudo systemctl restart pins.service
+```
+
+Before replacing the plugin copy, keep a backup of the previous
+`PowerBoxSDK.dll`. If NINA or `pins.service` fails to start after the update,
+restore the backup and restart `pins.service`.
+
+## Hardware Validation
+
+Pi'n'Stars hardware validation succeeded with this proof of concept:
+
+- Build succeeds on Raspberry Pi / Pi'n'Stars.
+- `cmake --install` succeeds after the CMake install header fixes.
+- The new `libPowerBoxSDK.so` was copied into the NINA `pins.plugin` directory
+  as `PowerBoxSDK.dll`.
+- `pins.service` starts successfully.
+- NINA reports `Found 1 PINS.PowerBox Switch Hubs`.
+- Touch'n'Stars shows and controls the Astralim PowerBox.
+- DC outputs switch correctly.
+- Dew/PWM outputs switch correctly.
+- BME280 environment telemetry is shown:
+  - temperature
+  - humidity
+  - dew point
+- Dew probe temperature is no longer incorrectly filled with dew point.
+- Voltage/current telemetry appears plausible.
+- No Touch'n'Stars frontend changes were required.
+- No Astralim INDI driver changes were required.
+
 ## Hardware Test Plan
 
 1. Confirm boot config includes:
@@ -86,8 +122,9 @@ sudo cmake --install build
 
 ## Known Risks
 
-- Actual hardware validation is still required for the new SDK device.
 - INA219 shunt values are based on the existing Astralim INDI implementation:
   `0.005 ohm` for system supply and `0.01 ohm` for output channels.
+- Longer-term voltage/current calibration should be verified against known loads
+  and measurement equipment.
 - The Astralim scan path intentionally takes precedence over
   `PinsBoxCustomDevice` when Astralim hardware is detected.
